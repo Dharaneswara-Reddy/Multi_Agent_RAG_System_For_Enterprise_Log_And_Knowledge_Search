@@ -1,0 +1,60 @@
+[project]
+name = "aiops-copilot"
+version = "0.1.0"
+description = "Multi-agent RAG copilot for enterprise log and knowledge search"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.75",
+    "fastembed>=0.7",
+    "numpy>=2.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "langgraph>=0.6",
+    "langchain-core>=0.3",
+    "fastapi>=0.118",
+    "uvicorn[standard]>=0.34",
+    "streamlit>=1.45",
+    "sqlalchemy>=2.0",
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+    "rank-bm25>=0.2.2",
+    "plotly>=6.0",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aiops"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+# Explicit rather than inherited, so the same set runs locally and in CI.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "DTZ"]
+ignore = [
+    "E501",   # long lines are almost all regexes and prose comments
+    "B008",   # FastAPI's Depends()/Body() defaults are the documented idiom
+    "SIM108", # ternaries are not always clearer than if/else
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+# Most log formats emit no timezone at all (syslog omits even the year), so the
+# parsed timestamps are genuinely naive. Attaching UTC would assert something
+# the source data does not say.
+"src/aiops/ingestion/parsers.py" = ["DTZ001", "DTZ006", "DTZ007"]
+"src/aiops/ingestion/corpus.py" = ["DTZ001"]
