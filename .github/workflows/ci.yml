@@ -1,0 +1,71 @@
+name: CI
+
+# The AI-specific quality gate is the point of this pipeline: unit tests catch
+# code regressions, but a RAG system degrades silently through retrieval and
+# safety regressions that ordinary tests never see. `evaluate.py --gate` fails
+# the build when recall, MRR, injection blocking, or out-of-scope escalation
+# drop below their floors.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Force the deterministic extractive path so CI never needs a credential and
+  # never spends money. Retrieval and safety are fully measurable here; answer
+  # quality is not, and is reported as n/a rather than faked.
+  AIOPS_FORCE_OFFLINE: "1"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras || uv pip install -e ".[dev]"
+
+      - name: Lint
+        run: uv run ruff check src tests scripts
+
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-bge-small-en-v1.5
+
+      - name: Fetch real log samples (LogHub)
+        run: bash scripts/fetch_loghub.sh
+        continue-on-error: true
+
+      - name: Build corpus and index
+        run: uv run python scripts/setup.py
+
+      - name: Unit + integration tests
+        run: uv run pytest -q --tb=short
+
+      - name: AI quality gate (retrieval + safety thresholds)
+        run: uv run python scripts/evaluate.py --gate --no-quality
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report
+          path: data/eval/latest_report.json
+          if-no-files-found: warn
