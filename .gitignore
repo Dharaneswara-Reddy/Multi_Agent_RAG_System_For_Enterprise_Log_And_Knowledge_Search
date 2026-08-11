@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Generated data — rebuild with `uv run python scripts/setup.py`
+data/index/
+data/aiops.db
+data/docs/
+data/logs/*.log
+data/logs/external/
+data/corpus_manifest.json
+data/error_catalog.json
+data/eval/latest_report.json
+data/eval/sweep.json
+
+# Keep the golden set — it is the contract, not an artifact
+!data/eval/golden.jsonl
+
+# Env
+.env
+
+# Local agent/editor state
+.claude/
