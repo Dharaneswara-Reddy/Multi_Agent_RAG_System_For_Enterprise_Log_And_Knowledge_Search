@@ -54,21 +54,44 @@ class Settings(BaseSettings):
 
     # --- retrieval ---
     top_k: int = 8
-    candidate_k: int = 30  # first-stage pool handed to the reranker
+    # First-stage pool handed to the reranker. Reranking cost is linear in this
+    # number — every candidate is a cross-encoder forward pass — and on CPU that
+    # dominates the whole pipeline.
+    #
+    # 16 is chosen on the accuracy/latency curve (scripts/sweep_candidates.py),
+    # not for accuracy alone: 30 scores recall 0.964 at 4.42s/query, 16 scores
+    # 0.958 at 2.36s. That is 47% of the latency for 0.006 recall — half a case
+    # out of 88 — and MRR is marginally *better* at 16. A demo that answers in
+    # two seconds is worth more than half a case of recall.
+    candidate_k: int = 16
 
     # --- reranking (stage 2) ---
     # A bi-encoder scores query and chunk independently; a cross-encoder reads
     # them together and is far more accurate at ranking. Too slow for the whole
     # corpus, which is why it runs over candidate_k only.
     rerank_enabled: bool = True
-    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"  # 80MB, ONNX/CPU
-    # 1.0 = the reranker decides outright. Swept; see README.
+    # L-12 over L-6 is measured, not assumed (scripts/sweep_rerank.py): on blend
+    # fusion L-12 reaches recall 0.964 / MRR 0.859 against L-6's 0.930 / 0.844.
+    # It costs roughly 2x the latency, which is the trade recorded in the README.
+    # Both are small ONNX models (120MB / 80MB) — deliberately sized for a
+    # CPU-only machine rather than reaching for bge-reranker-base at 1GB.
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-12-v2"  # 120MB, ONNX/CPU
+    # 1.0 = the reranker decides outright, which won on recall (0.964 vs 0.958
+    # at 0.25). The two are within half a case of each other on 88 queries, so
+    # this follows the project's stated tie-break — recall first — rather than
+    # claiming a meaningful gap.
     rerank_blend: float = 1.0
 
     # --- fusion ---
     # "blend" = min-max normalised weighted sum of dense and BM25 scores.
     # "rrf"   = reciprocal rank fusion, which ignores scores and uses ranks.
-    fusion: str = "rrf"
+    #
+    # RRF is the textbook choice and it *loses* here, which is why both are
+    # implemented and swept. With reranking on top, blend reaches recall 0.964 /
+    # MRR 0.859 against RRF's 0.947 / 0.866. RRF discards score magnitudes, and
+    # on this corpus the magnitudes carry real signal: a BM25 spike on an exact
+    # error code is evidence, and rank fusion flattens it to "first place".
+    fusion: str = "blend"
     rrf_k: int = 60  # RRF damping constant; 60 is the value from the original paper
 
     # --- multi-hop retrieval ---
