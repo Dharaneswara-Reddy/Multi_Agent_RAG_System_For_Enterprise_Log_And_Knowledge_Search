@@ -1,0 +1,50 @@
+[
+  {
+    "candidate_k": 8,
+    "recall": 0.9489,
+    "precision": 0.2383,
+    "mrr": 0.8616,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 1.18
+  },
+  {
+    "candidate_k": 12,
+    "recall": 0.9527,
+    "precision": 0.2466,
+    "mrr": 0.8616,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 1.769
+  },
+  {
+    "candidate_k": 16,
+    "recall": 0.9583,
+    "precision": 0.2476,
+    "mrr": 0.861,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 2.359
+  },
+  {
+    "candidate_k": 20,
+    "recall": 0.9583,
+    "precision": 0.2485,
+    "mrr": 0.8597,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 2.949
+  },
+  {
+    "candidate_k": 24,
+    "recall": 0.9583,
+    "precision": 0.2468,
+    "mrr": 0.8593,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 3.539
+  },
+  {
+    "candidate_k": 30,
+    "recall": 0.964,
+    "precision": 0.2463,
+    "mrr": 0.8593,
+    "hit_rate": 0.9886,
+    "est_s_per_query": 4.423
+  }
+]

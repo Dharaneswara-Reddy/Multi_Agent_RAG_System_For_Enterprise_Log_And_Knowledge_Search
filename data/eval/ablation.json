@@ -1,0 +1,56 @@
+[
+  {
+    "n": 88,
+    "recall": 0.8864,
+    "precision": 0.2766,
+    "mrr": 0.8233,
+    "hit_rate": 0.9545,
+    "config": "1. dense only (naive)",
+    "s_per_query": 0.035
+  },
+  {
+    "n": 88,
+    "recall": 0.9489,
+    "precision": 0.2383,
+    "mrr": 0.83,
+    "hit_rate": 0.9886,
+    "config": "2. + BM25 hybrid (blend)",
+    "s_per_query": 0.0595
+  },
+  {
+    "n": 88,
+    "recall": 0.9242,
+    "precision": 0.2745,
+    "mrr": 0.8201,
+    "hit_rate": 0.9659,
+    "config": "   alt: hybrid via RRF",
+    "s_per_query": 0.0567
+  },
+  {
+    "n": 88,
+    "recall": 0.9583,
+    "precision": 0.2476,
+    "mrr": 0.861,
+    "hit_rate": 0.9886,
+    "config": "3. + cross-encoder rerank",
+    "s_per_query": 2.9331
+  },
+  {
+    "n": 88,
+    "recall": 0.9583,
+    "precision": 0.2509,
+    "mrr": 0.86,
+    "hit_rate": 0.9886,
+    "config": "4. + multi-query rewriting",
+    "s_per_query": 3.2275
+  },
+  {
+    "n": 88,
+    "recall": 0.9792,
+    "precision": 0.1874,
+    "mrr": 0.8615,
+    "hit_rate": 1.0,
+    "config": "5. + multi-hop references",
+    "s_per_query": 3.0956
+  }
+]
