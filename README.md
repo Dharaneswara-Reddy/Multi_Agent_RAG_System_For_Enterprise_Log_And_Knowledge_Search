@@ -35,7 +35,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 90 tests
+uv run pytest -q                                   # 109 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
@@ -61,7 +61,7 @@ number. Set the key to enable synthesis and LLM-judge grading.
 | Human-in-the-loop | `knowledge/catalog.py`, UI tab | confidence-gated escalation queue |
 | Observability | `observability/tracing.py` | OTel `gen_ai.*` spans, cost + latency per call |
 | Cost/latency routing | `llm.py` | Haiku for routing/extraction, Opus for synthesis |
-| Evaluation | `evaluation/harness.py` | 46-case golden set, 3 metric tiers |
+| Evaluation | `evaluation/harness.py` | 95-case golden set, 3 metric tiers |
 | CI quality gate | `.github/workflows/ci.yml` | build fails on retrieval or safety regression |
 | API | `api/server.py` | FastAPI: ask, search, metrics, escalations, traces |
 | UI | `ui/app.py` | Streamlit console, 5 surfaces |
@@ -77,14 +77,43 @@ a company owns, and no public dataset pairs *logs* with the *documentation that
 explains them* — which is the entire point of this system. So the corpus has two
 layers:
 
-**1. Synthetic backbone — "Meridian", a fictional e-commerce platform.**
+**1a. Hand-written backbone — "Meridian", a fictional e-commerce platform.**
 Eighteen documents and five correlated incident scenarios, hand-written to be
 *internally consistent*: `PAY-5021` appears in the logs, in the SQL catalog, in
 a runbook, and in a post-mortem, and the payment → order → gateway failure
 cascade shares trace IDs across services. That consistency is what makes
 evaluation possible — a golden question like *"which service failed first?"* has
 a verifiable answer (`payment-service`; the gateway 504s are downstream
-symptoms).
+symptoms). These eighteen remain the canonical labelled answers.
+
+**1b. Generated expansion — 201 further documents over 42 more services.**
+Eighteen documents is not enough to make retrieval *hard*, and a corpus that
+small flatters every metric measured on it. The expansion (`ingestion/expansion/`)
+adds 42 services, 66 error codes, 40 ADRs, 33 post-mortems, and 20 cross-cutting
+guides — 219 documents and ~44,000 words in total.
+
+It is generated from typed records rather than written as markdown literals,
+because 200 hand-written near-identical runbooks differ only in noise, which
+makes retrieval *look* hard while actually being trivial. The facts that matter
+— a distinct failure mode, fix, and anti-pattern per fault — are authored per
+entity; only the heading scaffolding is templated, exactly as a real
+engineering wiki's runbook template would be.
+
+Two properties are deliberate and load-bearing:
+
+- **Near-misses.** The expansion adds a dozen connection-pool faults, several
+  upstream-timeout faults, two clock-skew faults, and three fail-open decisions.
+  These are genuine distractors for the original `INV-3007`, `PAY-5021`, and
+  `AUTH-1015` questions. Retrieval now has to *rank*, not merely *find*.
+- **Cross-references.** Documents cite each other by id, so multi-hop questions
+  have an actual path to follow. `test_expansion.py` asserts that every
+  referenced code, ADR, and incident resolves — a generated corpus does not
+  crash when it is wrong, it renders fine and is quietly inconsistent.
+
+The expansion never redefines one of the original seven error codes, which is
+asserted by a test: if it did, the labelled answer for the original questions
+would become ambiguous and recall would move for reasons unrelated to retrieval
+quality.
 
 **2. Real-log overlay — nine production systems from [LogHub](https://github.com/logpai/loghub).**
 HDFS, OpenStack, Spark, Zookeeper, Hadoop, Apache, Linux, Mac, and Thunderbird
@@ -95,13 +124,23 @@ author shaped. The parser reaches **100% structured-field coverage across all
 exposed (Zookeeper thread names nest brackets: `QuorumPeer[myid=1]/0:0:...`,
 which broke a non-greedy regex that synthetic logs would never have caught).
 
-**Two limitations I'd state in an interview before being asked:**
+**Limitations I'd state in an interview before being asked:**
 - I authored both the corpus and the golden questions, which is a mild form of
   teaching to the test. Mitigated by writing questions from *what an SRE would
   ask* and including out-of-scope negatives, but not eliminated.
 - Synthetic logs are cleaner than production. The LogHub overlay covers format
   diversity; it does not cover truncated multi-line stack traces or partially
   corrupted lines.
+- **The 201 expansion documents share a house style**, because one author wrote
+  the underlying records and one template renders them. A real wiki has a dozen
+  authors, inconsistent structure, stale pages that contradict current ones, and
+  documents that simply do not answer the question they appear to. My corpus is
+  more uniform and more correct than any real one, which almost certainly still
+  flatters retrieval — just by less than 18 documents did.
+- **The logs cover only the original seven services.** The 42 expansion services
+  have documentation but no log lines, so `log_evidence` questions are still
+  scored against the original incident set. Retrieval got harder for document
+  questions and did not get harder for log questions.
 
 ---
 
@@ -118,7 +157,7 @@ on Haiku; synthesis runs on Opus with adaptive thinking. Every call records
 tokens and cost on its span, so `/metrics` reports actual `$/query` rather than
 a claim about it.
 
-**No vector database.** The corpus is ~1,200 chunks × 384 dims ≈ 1.8 MB of
+**No vector database.** The corpus is ~1,560 chunks × 384 dims ≈ 1.8 MB of
 float32; a brute-force matmul is sub-millisecond. An ANN index would add a
 server, a schema, and a sync job to optimise something that isn't the
 bottleneck. `retrieval/index.py` exposes the same interface a Qdrant client
@@ -153,22 +192,37 @@ information about whether retrieval found anything.
 The relevance floor is measured, not guessed (`scripts/calibrate.py`):
 
 ```
-on-corpus questions   (n=12)   min 0.719   mean 0.787   max 0.872
-off-corpus questions  (n=8)    min 0.476   mean 0.509   max 0.566
-                                                  separation 0.153
+on-corpus questions   (n=24)   min 0.602   mean 0.772   max 0.863
+off-corpus questions  (n=8)    min 0.458   mean 0.502   max 0.554
+                                                  separation 0.048
 ```
 
-`RELEVANCE_FLOOR = 0.64` sits in that gap. Below it, confidence collapses and
+`RELEVANCE_FLOOR = 0.58` sits in that gap. Below it, confidence collapses and
 the answer escalates regardless of how fluent or well-cited it is — which is
 what makes *"Who won the 1998 world cup?"* escalate while *"How do I fix pool
 exhaustion?"* answers confidently.
 
 These constants are properties of (embedding model × corpus), not universal
-truths — re-running the calibration is **mandatory** after changing either. That
-turned out to matter: retuning the chunk size from 320 to 160 tokens more than
-doubled the separation (0.070 → 0.153), so the same change that improved recall
-also made the escalation boundary substantially more robust. I would not have
-predicted that; the calibration script is what surfaced it.
+truths — re-running the calibration is **mandatory** after changing either.
+
+**The separation narrowed when the corpus grew, and that is the honest result.**
+On the 18-document corpus this gap was 0.153. It is now 0.048, and the floor had
+to come *down* from 0.64 to 0.58 — at 0.64 it would sit above the on-corpus
+minimum of 0.602 and over-escalate legitimate questions about thinly-covered
+services.
+
+Two things changed together, and I would not separate them in an interview:
+the corpus went from 18 to 219 documents, and the probe set went from 12
+questions covering seven services to 24 covering all 42. The old probes only
+ever asked about the corpus's densest, best-covered region, so the old 0.153
+was partly a measurement artefact.
+
+The underlying effect is real, though: the more a corpus contains, the less a
+single cosine score separates "covered" from "not covered", because there is
+almost always *something* moderately similar. That is the argument for
+confidence being a composite — corroboration across distinct sources and
+citation grounding carry weight precisely because the retrieval term alone
+degrades with scale.
 
 ---
 
@@ -182,45 +236,89 @@ Three tiers, deliberately separated by cost and trust level:
 | Behaviour | routing accuracy, injection blocked, out-of-scope escalated | no | ✅ every commit |
 | Answer quality | faithfulness, coverage, citation validity | **yes** | on demand |
 
-Current results (46 golden cases, offline mode, tuned configuration):
+Current results (95 golden cases over 219 documents, offline mode, tuned
+configuration):
 
 ```
 RETRIEVAL                      BEHAVIOUR
   recall@k        0.949          injection blocked        100%
-  precision@k     0.414          out-of-scope escalated   100%
-  MRR             0.836          routing accuracy         (see note)
-  hit rate        1.000
+  precision@k     0.238          out-of-scope escalated   100%
+  MRR             0.830          routing accuracy         (see note)
+  hit rate        0.989
 ```
 
-### The sweep that produced those numbers
+**Read `precision@k` carefully — its denominator is the number of distinct
+documents surfaced, not `k`.** With 219 documents competing and a mean of 1.41
+labelled documents per question, the top-8 chunks now come from 5.9 distinct
+documents on average rather than clustering inside one or two. More competing
+documents surface, so the denominator grows and precision falls even where
+recall does not. It fell from 0.414 to 0.238 for that reason, not because
+ranking got worse — MRR is essentially flat (0.836 → 0.830).
+
+### Scaling the corpus 12× — what actually changed
+
+The corpus deliberately grew from 18 to 219 documents to test whether the
+original numbers were measuring retrieval quality or just a corpus too small to
+be confusing. Same 43 original questions, same configuration, only the corpus
+changed:
+
+| | 18 documents | 219 documents |
+|---|---|---|
+| recall@k | 0.949 | 0.847 |
+| MRR | 0.836 | 0.773 |
+| hit rate | 1.000 | 0.944 |
+
+**Some of the original score was corpus size, not retrieval quality.** Adding
+plausible neighbours cost 10 points of recall on questions that had not changed
+at all. Retuning on the larger corpus recovers recall to 0.949 across the full
+95-case set, but the honest statement is that the first number flattered the
+system.
+
+### The sweep, re-run at scale
 
 `scripts/evaluate.py --sweep` rebuilds the index at three chunk sizes and scores
-five dense/BM25 blends against the golden set — 15 configurations:
+five dense/BM25 blends — 15 configurations. **The optimum moved when the corpus
+grew**, which is the single most useful thing the expansion produced:
 
-| chunk tokens | dense weight | recall@k | MRR |
-|---|---|---|---|
-| 160 | **0.80** | **0.949** | **0.836** |
-| 320 | 0.80 | 0.935 | 0.826 |
-| 640 | 0.65 | 0.949 | 0.787 |
-| 320 | 0.65 *(old default)* | 0.921 | 0.762 |
-| 160 | 1.00 *(pure vector)* | 0.857 | 0.822 |
-| 320 | 1.00 *(pure vector)* | 0.782 | 0.775 |
+| chunk tokens | dense weight | recall@k | MRR | |
+|---|---|---|---|---|
+| 320 | **0.65** | **0.949** | 0.830 | new optimum |
+| 640 | 0.50 | 0.939 | 0.845 | |
+| 320 | 0.50 | 0.932 | 0.830 | |
+| 640 | 0.80 | 0.924 | 0.861 | best MRR |
+| 160 | 0.80 | 0.915 | 0.863 | *old optimum* |
+| 640 | 1.00 *(pure vector)* | 0.892 | 0.815 | |
+| 320 | 1.00 *(pure vector)* | 0.886 | 0.823 | |
+| 160 | 1.00 *(pure vector)* | 0.875 | 0.827 | |
 
-Two findings worth stating:
+Three findings:
 
-**Pure dense retrieval loses at every chunk size.** `dense_weight = 1.0` is the
-worst or near-worst row in each block. BM25 is carrying exact-match tokens —
-`PAY-5021`, `INV-3007`, `idx_reservations_sku_warehouse` — that the embedding
-blurs into "some error code". That is the concrete argument for hybrid over
-pure vector search, measured rather than asserted.
+**Pure dense retrieval still loses at every chunk size, and by a wider margin.**
+`dense_weight = 1.0` is the worst row in every block. BM25 carries exact-match
+tokens — `PAY-5021`, `INV-3007`, `idx_reservations_sku_warehouse` — that the
+embedding blurs into "some error code". With 73 error codes across 42 services
+that blurring costs more than it did with 7, so the argument for hybrid over
+pure vector got *stronger* with scale.
 
-**Smaller chunks won.** 160 tokens beat 320 and 640. This corpus is dense
-reference prose where a runbook step is a complete retrieval unit; larger chunks
-average two topics into one vector. I would not assume this generalises to a
-corpus of long narrative documents — which is the point of having the sweep.
+**The optimal chunk size doubled, 160 → 320.** On the small corpus I concluded
+that smaller chunks win because a runbook section is a complete retrieval unit
+and larger chunks average two topics into one vector. That reasoning was right
+about chunks and wrong about the problem: with 219 documents a query has
+hundreds of plausible neighbours, and fine-grained chunks fragment a document
+into many weak candidates that split its evidence between them. Larger chunks
+carry enough surrounding context to win the comparison. **The conclusion I drew
+from the first sweep did not survive contact with a realistic corpus.**
 
-The defaults in `config.py` are the sweep winners, with the measurement recorded
-in the comment next to each.
+**BM25's optimal share grew, 0.20 → 0.35.** Same cause, from the other
+direction: as near-duplicate documents multiply, exact tokens discriminate and
+embeddings converge.
+
+160 tokens still wins on MRR (0.863 against 0.830). The tie is broken on recall
+because `top_k=8` chunks reach the synthesiser either way — having the right
+document in the context matters more than its exact rank within it.
+
+The defaults in `config.py` are the sweep winners, with the measurement and the
+superseded reasoning recorded in the comment next to each.
 
 **Answer quality reports `n/a` offline rather than a number.** Reporting a
 metric you cannot actually measure is worse than reporting none — the stub's
@@ -313,8 +411,15 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 - **Deploy to Azure AI Foundry.** Deliberately deferred until the local system
   was complete; the orchestrator endpoint is the natural first piece.
 - **Reranking.** A cross-encoder over the top ~30 candidates should lift MRR
-  (currently 0.836) more than further chunk tuning — `log_evidence` is the
-  weakest category at 0.559 MRR and the obvious first target.
+  (currently 0.830) more than further chunk tuning — `log_evidence` is the
+  weakest category at 0.366 MRR and the obvious first target. It got worse with
+  the expansion (0.559 → 0.366): log chunks now compete with 416 document chunks
+  for the same eight slots, and a hybrid blend tuned for document retrieval is
+  not tuned for them. A per-route weight is probably the cheaper fix.
+- **Log coverage for the expansion services.** 42 services have runbooks and no
+  logs, which caps what the log analyst can be evaluated on. Generating
+  correlated incidents for a subset would let `log_evidence` face the same
+  distractor pressure the document questions now do.
 - **A real triage evaluation.** Routing accuracy is currently only measurable
   against the offline keyword stub; the triage model's actual routing quality is
   unmeasured until the harness runs with a key.
