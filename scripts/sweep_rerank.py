@@ -26,13 +26,31 @@ from aiops.evaluation.harness import load_golden
 from aiops.retrieval.index import get_index
 from aiops.retrieval.rerank import Reranker
 
+# Small ONNX cross-encoders only. This is a memory budget, not a preference:
+# the sweep runs on a 16GB CPU-only laptop, and loading a gigabyte-scale
+# reranker here previously exhausted memory and took the editor down with it.
+# Larger models are available via --models but are opt-in for that reason.
 MODELS = [
-    "Xenova/ms-marco-MiniLM-L-6-v2",
-    "Xenova/ms-marco-MiniLM-L-12-v2",
-    "jinaai/jina-reranker-v1-turbo-en",
-    "BAAI/bge-reranker-base",
+    "Xenova/ms-marco-MiniLM-L-6-v2",  # 80MB
+    "Xenova/ms-marco-MiniLM-L-12-v2",  # 120MB
+    "jinaai/jina-reranker-v1-turbo-en",  # 150MB
 ]
+# Anything at or above this size is refused unless --allow-large is passed.
+LARGE_MODEL_GB = 0.5
 BLENDS = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+
+def _model_size_gb(name: str) -> float:
+    """Advertised size from the FastEmbed registry, 0.0 if unknown."""
+    try:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        for entry in TextCrossEncoder.list_supported_models():
+            if entry["model"] == name:
+                return float(entry.get("size_in_GB") or 0.0)
+    except Exception:
+        pass
+    return 0.0
 
 
 def metrics_from(order, expected, k: int) -> tuple[float, float, float, float]:
@@ -51,7 +69,21 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="*", default=MODELS)
     ap.add_argument("--fusion", default=settings.fusion)
+    ap.add_argument(
+        "--allow-large",
+        action="store_true",
+        help=f"permit rerankers >= {LARGE_MODEL_GB}GB (needs headroom this machine may not have)",
+    )
     args = ap.parse_args()
+
+    if not args.allow_large:
+        skipped = [m for m in args.models if _model_size_gb(m) >= LARGE_MODEL_GB]
+        if skipped:
+            print(f"skipping large models (pass --allow-large to include): {', '.join(skipped)}")
+            args.models = [m for m in args.models if m not in skipped]
+        if not args.models:
+            print("no models left to sweep")
+            return 1
 
     cases = [c for c in load_golden() if c.relevant_docs]
     index = get_index()

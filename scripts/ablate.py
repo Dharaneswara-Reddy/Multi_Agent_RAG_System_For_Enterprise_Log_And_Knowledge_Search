@@ -70,26 +70,38 @@ def main() -> int:
     index = get_index()
     k = settings.top_k
 
+    from aiops.retrieval.pipeline import retrieve as pipe
+
+    def staged(**kw):
+        return lambda q: pipe(q, index, top_k=k, **kw)[0]
+
+    # Cumulative: each row adds one capability to the row above it, so the delta
+    # between adjacent rows is that capability's contribution. A row that does
+    # not beat the one above it is a component to remove, not to defend.
     configs: list[tuple[str, callable]] = [
         (
-            "1. dense only (pure vector)",
-            lambda q: index.search(q, top_k=k, dense_weight=1.0, fusion="blend", ),
+            "1. dense only (naive)",
+            lambda q: index.search(q, top_k=k, dense_weight=1.0, fusion="blend"),
         ),
         (
-            "2. hybrid, weighted blend",
+            "2. + BM25 hybrid (blend)",
             lambda q: index.search(q, top_k=k, fusion="blend"),
         ),
         (
-            "3. hybrid, RRF",
+            "   alt: hybrid via RRF",
             lambda q: index.search(q, top_k=k, fusion="rrf"),
         ),
         (
-            "4. hybrid blend + rerank",
-            lambda q: index.retrieve(q, top_k=k, fusion="blend", rerank=True),
+            "3. + cross-encoder rerank",
+            staged(multiquery=False, rerank=True, multihop=False),
         ),
         (
-            "5. hybrid RRF + rerank",
-            lambda q: index.retrieve(q, top_k=k, fusion="rrf", rerank=True),
+            "4. + multi-query rewriting",
+            staged(multiquery=True, rerank=True, multihop=False),
+        ),
+        (
+            "5. + multi-hop references",
+            staged(multiquery=True, rerank=True, multihop=True),
         ),
     ]
 
