@@ -9,18 +9,29 @@ Built as a portfolio project for the Cognizant Ace Frontier Engineer program.
 
 ```
                  ┌─────────── triage (supervisor, cheap model) ───────────┐
-   question ────▶│  route · extract error codes · rewrite search query    │
-                 └───┬──────────────────┬───────────────────┬─────────────┘
-                     │                  │                   │
-              knowledge agent      log analyst          both (hybrid)
-              (docs retrieval)   (log correlation)
-                     └──────────────────┴───────────────────┘
-                                        │
-                          error-code catalog  (SQL tool, no model)
-                                        │
-                              synthesizer (reasoning model)
-                                        │
-                            guardrail gate → answer | escalate | block
+   question ────▶│  route · extract error codes · rewrite search query    │◀─┐
+                 └───┬──────────────────┬───────────────────┬─────────────┘  │
+                     │                  │                   │                │
+              knowledge agent      log analyst          both (hybrid)        │
+              (docs retrieval)   (log correlation)                           │
+                     └──────────────────┴───────────────────┘                │
+                                        │                                    │
+              ┌─────────────────────────▼─────────────────────────┐          │
+              │  retrieval pipeline                               │          │
+              │  hybrid (dense + BM25) → cross-encoder rerank      │          │
+              │  → cross-reference hops → context assembly         │          │
+              └─────────────────────────┬─────────────────────────┘          │
+                                        │                                    │
+                          error-code catalog  (SQL tool, no model)           │
+                                        │                                    │
+                              synthesizer (reasoning model)                  │
+                                        │                                    │
+              ┌─────────────────────────▼─────────────────────────┐          │
+              │  guardrail gate                                   │          │
+              │  citations · claim verification · confidence      │──────────┘
+              └─────────────────────────┬─────────────────────────┘   retry once,
+                                        │                             broadened
+                            answer | escalate | block
 ```
 
 ---
@@ -35,7 +46,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 109 tests
+uv run pytest -q                                   # 155 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
@@ -54,8 +65,13 @@ number. Set the key to enable synthesis and LLM-judge grading.
 | Capability | Where | Note |
 |---|---|---|
 | Multi-agent orchestration | `agents/graph.py` | LangGraph supervisor, 2 agents + 1 SQL tool |
+| Self-correction | `agents/graph.py` | bounded retry loop — the graph's only cycle |
 | RAG pipeline | `ingestion/`, `embedding/`, `retrieval/` | FastEmbed + hand-written hybrid index |
+| Re-ranking | `retrieval/rerank.py` | ONNX cross-encoder over the candidate pool |
+| Fusion | `retrieval/index.py` | weighted blend **and** RRF, both swept |
+| Multi-hop retrieval | `retrieval/multihop.py` | follows real cross-reference edges |
 | Context engineering | `retrieval/context.py` | per-doc cap, trace expansion, char budget |
+| Claim verification | `guardrails/verify.py` | checks factual atoms, not just citations |
 | Knowledge engineering | `ingestion/corpus.py`, `knowledge/catalog.py` | metadata schema + SQL error catalog |
 | Guardrails | `guardrails/rules.py` | PII, injection, citation grounding, destructive-action |
 | Human-in-the-loop | `knowledge/catalog.py`, UI tab | confidence-gated escalation queue |
@@ -152,6 +168,42 @@ surface to a query that SQL answers exactly. An agent earns its place by having
 a distinct *reasoning* job; a lookup does not. The triage supervisor routes but
 never answers.
 
+**Self-correction is bounded and conditional.** The graph has exactly one
+cycle: a weak answer retries once with the service filters dropped and the raw
+question restored, because the most common cause of a weak first attempt is
+triage over-narrowing, not the corpus lacking an answer. Two things stop it
+becoming a loop that papers over real failure — a hard attempt budget, and a
+`_retry_would_help` check that declines to retry when retrieval was already
+healthy. A well-retrieved question the corpus simply does not cover escalates
+immediately, because retrying would spend a synthesis to reach the same
+conclusion.
+
+**A blocked answer is never retried.** Retrying past a guardrail is how a
+guardrail gets worn down by repetition, so blocked outputs and destructive
+requests bypass the retry branch entirely. This is asserted by a test rather
+than left to the ordering of two conditions.
+
+**Claim verification checks atoms, not prose.** Citation checking proves sources
+are *real*; it does not prove the answer said what they say. An answer can cite
+three genuine runbooks and invent the number in the middle of a sentence. So
+verification targets **checkable atoms** — error codes, CLI flags, thresholds,
+config keys, commands — because those are exact strings a model cannot
+legitimately paraphrase. If an answer says `--batch-size=99999` and that string
+is absent from the retrieved context, it was fabricated with respect to this
+corpus.
+
+That choice is deliberate on three counts: it is deterministic, so it runs in
+CI with no second model to trust (an LLM judge grading groundedness is itself
+ungrounded); it is high-precision, because prose paraphrases legitimately and
+`PAY-5021` does not, and a noisy guardrail gets switched off; and it fails in
+the safe direction, catching invented specifics while missing fabricated causal
+claims in plain prose. It is a floor, not a ceiling.
+
+It **warns** rather than blocks, and the warning costs confidence via a
+multiplier. Blocking on a formatting difference would train people to route
+around the guardrail; degrading toward escalation sends the answer to a human
+instead.
+
 **Cost routing is measured, not asserted.** Triage and structured extraction run
 on Haiku; synthesis runs on Opus with adaptive thinking. Every call records
 tokens and cost on its span, so `/metrics` reports actual `$/query` rather than
@@ -241,11 +293,80 @@ configuration):
 
 ```
 RETRIEVAL                      BEHAVIOUR
-  recall@k        0.949          injection blocked        100%
-  precision@k     0.238          out-of-scope escalated   100%
-  MRR             0.830          routing accuracy         (see note)
-  hit rate        0.989
+  recall@k        0.983          injection blocked        100%
+  precision@k     0.186          out-of-scope escalated   100%
+  MRR             0.863          routing accuracy         (see note)
+  hit rate        1.000
 ```
+
+Against the same 95 cases before this work: recall 0.949 → **0.983**, MRR
+0.830 → **0.863**, hit rate 0.989 → **1.000**.
+
+### The retrieval pipeline, and what each stage is worth
+
+```
+query -> hybrid search (dense + BM25) -> cross-encoder rerank -> reference hops -> context
+```
+
+`scripts/ablate.py` builds this cumulatively, one capability per row, so the
+delta between adjacent rows *is* that capability's contribution. A row that
+does not beat the row above it is a component to remove, not to defend:
+
+| Configuration | recall | prec | MRR | hit | s/query |
+|---|---|---|---|---|---|
+| 1. dense only (naive) | 0.886 | 0.277 | 0.823 | 0.955 | 0.04 |
+| 2. + BM25 hybrid (blend) | 0.949 | 0.238 | 0.830 | 0.989 | 0.06 |
+| &nbsp;&nbsp;&nbsp;*alt: hybrid via RRF* | *0.924* | *0.275* | *0.820* | *0.966* | *0.06* |
+| 3. + cross-encoder rerank | 0.958 | 0.248 | **0.861** | 0.989 | 2.93 |
+| 4. + multi-query rewriting | 0.958 | 0.251 | 0.860 | 0.989 | 3.23 |
+| 5. + multi-hop references | **0.979** | 0.187 | 0.862 | **1.000** | 3.10 |
+
+The shipped configuration is rows 1–3 plus row 5. **Row 4 is deliberately
+excluded** — see below. Dropping it is worth a further +0.004 recall, which is
+how the headline 0.983 exceeds the 0.979 in the table.
+
+**BM25 is the single biggest win** (+0.063 recall) and the cheapest. Exact
+tokens — `PAY-5021`, `idx_reservations_sku_warehouse` — are what the embedding
+blurs into "some error code".
+
+**Reranking buys ranking, not recall** (+0.031 MRR, +0.009 recall) and costs
+**50× the latency**. That is the honest trade: it is the difference between the
+right document being in the context and being *first* in it.
+
+**Multi-hop closes the last gap** — hit rate reaches 1.000, meaning every
+labelled question now surfaces at least one correct document. `causality`
+questions gain most (MRR 0.883 → 0.950), which is exactly what following a
+runbook's citation to its ADR should do. Precision falls because hops add
+documents to the denominator by design; they are corroboration, and they are
+deliberately excluded from the corroboration term in confidence so the pipeline
+cannot reward itself for expanding.
+
+**Multi-query rewriting does not work, and is switched off.** It moved nothing
+(0.958 → 0.958) for +0.3s. Suspecting the golden set was biased — I wrote both
+the questions and the corpus, so the questions already speak the corpus's
+vocabulary — I re-tested on 20 deliberately conversational rephrasings
+(`scripts/eval_paraphrase.py`): *"carts keep emptying themselves when the site
+gets busy"*. Identical result, recall +0.000, MRR +0.000.
+
+The reason is that deterministic variants are too *close* to the original —
+stripping stopwords barely moves the embedding, so fusing them fuses
+near-duplicate lists. Real query diversity needs a model that can produce
+"Redis eviction under memory pressure" from that sentence, which cannot be
+measured in CI without a key. The code is kept because that is an untested
+hypothesis; the default is off because the tested path failed.
+
+### Where it is still weak
+
+That paraphrase experiment surfaced the system's sharpest limitation, and it is
+worth stating plainly: on conversational phrasing, **recall falls from 0.979 to
+0.600**. The system is markedly better at questions asked in its own vocabulary
+than at questions asked the way someone under pressure actually types. Every
+headline number above is measured on questions I wrote, and that gap is the
+honest size of the bias.
+
+`log_evidence` also remains the weakest category at **MRR 0.404** despite
+recall of 0.929 — the right log chunk is found and ranked below its
+near-identical neighbours, which is the one place reranking has not helped much.
 
 **Read `precision@k` carefully — its denominator is the number of distinct
 documents surfaced, not `k`.** With 219 documents competing and a mean of 1.41
@@ -410,16 +531,21 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 - **Deploy to Azure AI Foundry.** Deliberately deferred until the local system
   was complete; the orchestrator endpoint is the natural first piece.
-- **Reranking.** A cross-encoder over the top ~30 candidates should lift MRR
-  (currently 0.830) more than further chunk tuning — `log_evidence` is the
-  weakest category at 0.366 MRR and the obvious first target. It got worse with
-  the expansion (0.559 → 0.366): log chunks now compete with 416 document chunks
-  for the same eight slots, and a hybrid blend tuned for document retrieval is
-  not tuned for them. A per-route weight is probably the cheaper fix.
+- **Robustness to phrasing.** The largest measured weakness: recall drops
+  0.979 → 0.600 on conversational rephrasings. Deterministic query variants
+  failed to close it. The untested hypothesis is LLM-generated variants, which
+  needs a key and a way to measure it that is not another thing I wrote.
+- **A per-route hybrid weight.** `log_evidence` sits at MRR 0.404 — log chunks
+  compete with 416 document chunks for eight slots under a blend weight tuned
+  for document retrieval. One weight per source type is the cheap next
+  experiment, and the sweep already has the shape to measure it.
 - **Log coverage for the expansion services.** 42 services have runbooks and no
   logs, which caps what the log analyst can be evaluated on. Generating
   correlated incidents for a subset would let `log_evidence` face the same
   distractor pressure the document questions now do.
+- **Reranking latency.** 2.9s/query on CPU is the dominant cost and the reason
+  `candidate_k` is 16 rather than 30. A GPU, or an ONNX int8 quantisation of the
+  same model, is the obvious fix and neither is available on this machine.
 - **A real triage evaluation.** Routing accuracy is currently only measurable
   against the offline keyword stub; the triage model's actual routing quality is
   unmeasured until the harness runs with a key.
