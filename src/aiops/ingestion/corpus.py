@@ -1011,6 +1011,17 @@ def expansion_catalog() -> list[ErrorCodeEntry]:
     return rows
 
 
+def full_catalog() -> list[ErrorCodeEntry]:
+    """Every error code in the corpus: the 7 canonical plus the 66 expansion rows.
+
+    This is what callers should use. `ERROR_CATALOG` alone is the canonical
+    subset and seeding the database from it leaves the SQL lookup tool unable to
+    resolve any expansion code — the runbook is retrievable but the deterministic
+    lookup says "unknown code", which is worse than either answer alone.
+    """
+    return ERROR_CATALOG + expansion_catalog()
+
+
 def generate_corpus(seed: int = 7) -> dict[str, int]:
     """Write docs, logs, and the error catalog to disk. Idempotent for a given seed."""
     from aiops.ingestion.expansion import render_all
@@ -1041,10 +1052,10 @@ def generate_corpus(seed: int = 7) -> dict[str, int]:
     log_path = settings.logs_dir / "meridian-platform.log"
     log_path.write_text("\n".join(ln.render() for ln in lines) + "\n", encoding="utf-8")
 
-    full_catalog = ERROR_CATALOG + expansion_catalog()
+    catalog = full_catalog()
     catalog_path = settings.data_dir / "error_catalog.json"
     catalog_path.write_text(
-        json.dumps([e.model_dump() for e in full_catalog], indent=2), encoding="utf-8"
+        json.dumps([e.model_dump() for e in catalog], indent=2), encoding="utf-8"
     )
 
     manifest = {
@@ -1053,7 +1064,7 @@ def generate_corpus(seed: int = 7) -> dict[str, int]:
         "expansion_documents": len(expansion_docs),
         "log_lines": len(lines),
         "incidents": len(incidents),
-        "error_codes": len(full_catalog),
+        "error_codes": len(catalog),
     }
     (settings.data_dir / "corpus_manifest.json").write_text(
         json.dumps({**manifest, "incidents_detail": [

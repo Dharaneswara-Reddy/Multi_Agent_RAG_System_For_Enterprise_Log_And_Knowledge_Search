@@ -95,9 +95,12 @@ def init_db(db_path: Path | None = None) -> None:
 
 def seed_error_catalog(entries: list[ErrorCodeEntry] | None = None, db_path: Path | None = None) -> int:
     if entries is None:
-        from aiops.ingestion.corpus import ERROR_CATALOG
+        # full_catalog(), not ERROR_CATALOG: the latter is only the 7 canonical
+        # codes, and seeding from it leaves the lookup tool unable to resolve
+        # any of the 66 expansion codes whose runbooks are in the index.
+        from aiops.ingestion.corpus import full_catalog
 
-        entries = ERROR_CATALOG
+        entries = full_catalog()
     init_db(db_path)
     with connect(db_path) as conn:
         for e in entries:
