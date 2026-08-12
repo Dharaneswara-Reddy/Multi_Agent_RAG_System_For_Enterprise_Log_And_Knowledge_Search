@@ -80,6 +80,8 @@ def evaluate_retrieval(
     chunk ids breaks every time chunking is retuned, which is precisely the
     experiment the harness exists to support.
     """
+    from aiops.retrieval.pipeline import retrieve as run_pipeline
+
     index = index or get_index()
     k = k or settings.top_k
     results: list[RetrievalResult] = []
@@ -87,7 +89,10 @@ def evaluate_retrieval(
     for case in cases:
         if not case.relevant_docs:
             continue  # negatives are scored in tier 2
-        hits = index.search(case.question, top_k=k)
+        # The full pipeline, not `index.search`: reported metrics must describe
+        # the system that actually answers questions. `scripts/ablate.py` is
+        # where individual stages are measured in isolation.
+        hits, _ = run_pipeline(case.question, index, top_k=k)
         retrieved = []
         for h in hits:
             if h.chunk.doc_id not in retrieved:

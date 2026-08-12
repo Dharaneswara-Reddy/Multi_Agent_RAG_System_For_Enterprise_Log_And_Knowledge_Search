@@ -66,8 +66,22 @@ OFF_CORPUS = [
 
 
 def top_cosine(index, query: str) -> float:
-    hits = index.search(query, top_k=1)
-    return hits[0].dense_score if hits else 0.0
+    """Top-hit cosine as the *production pipeline* would produce it.
+
+    This deliberately runs the full pipeline rather than `index.search`. The
+    constants derived here gate escalation in production, so measuring a
+    simpler path than production uses produces a floor that is calibrated for a
+    system nobody runs.
+
+    That is not hypothetical: when multi-query retrieval was added, this script
+    still measured single-query search, so the floor stayed where it was while
+    real scores shifted upward — and an off-corpus question began answering at
+    0.61 instead of escalating.
+    """
+    from aiops.retrieval.pipeline import retrieve
+
+    hits, _ = retrieve(query, index, top_k=1)
+    return max((h.dense_score for h in hits), default=0.0)
 
 
 def main() -> int:
