@@ -56,6 +56,11 @@ class OutputCheck:
     cited_refs: list[str] = field(default_factory=list)
     unknown_refs: list[str] = field(default_factory=list)
     grounded: bool = True
+    # Per-claim verification: the fraction of checkable atoms (error codes, CLI
+    # flags, thresholds) in the answer that actually appear in the context, and
+    # the ones that did not. 1.0 when the answer contains nothing exact.
+    claim_support: float = 1.0
+    unsupported_claims: list[str] = field(default_factory=list)
 
     @property
     def blocked(self) -> bool:
@@ -198,8 +203,15 @@ HEDGE_RE = re.compile(
 )
 
 
-def check_output(answer: str, allowed_refs: list[str]) -> OutputCheck:
-    """Validate a generated answer against the context it was given."""
+def check_output(
+    answer: str, allowed_refs: list[str], context_text: str | None = None
+) -> OutputCheck:
+    """Validate a generated answer against the context it was given.
+
+    When `context_text` is supplied, verification goes beyond "are the citations
+    real" to "does the context actually contain the exact things this answer
+    asserts" — see `guardrails.verify`.
+    """
     findings: list[GuardrailFinding] = []
     allowed = set(allowed_refs)
 
@@ -236,12 +248,36 @@ def check_output(answer: str, allowed_refs: list[str]) -> OutputCheck:
                 )
             )
 
+    claim_support = 1.0
+    unsupported_claims: list[str] = []
+    if context_text:
+        from aiops.guardrails.verify import verify_claims
+
+        check = verify_claims(answer, context_text)
+        claim_support = check.support_ratio
+        unsupported_claims = [atom for _kind, atom in check.unsupported]
+        if check.has_fabrication:
+            # WARN rather than BLOCK: the atom extractor is high-precision but
+            # not perfect, and blocking an answer on a formatting difference
+            # would train people to route around the guardrail. It costs
+            # confidence, which routes the answer to a human instead.
+            findings.append(
+                GuardrailFinding(
+                    "unsupported_claim",
+                    Severity.WARN,
+                    "answer states specifics absent from context: "
+                    + ", ".join(unsupported_claims[:4]),
+                )
+            )
+
     grounded = bool(cited) and not unknown
     return OutputCheck(
         findings=findings,
         cited_refs=sorted(set(cited)),
         unknown_refs=unknown,
         grounded=grounded,
+        claim_support=claim_support,
+        unsupported_claims=unsupported_claims,
     )
 
 
@@ -318,8 +354,17 @@ def score_confidence(
     corroboration = min(1.0, distinct_sources / 3.0)
     grounding = 1.0 if output.grounded else 0.35
     penalty = 0.5 if output.blocked else 1.0
+
+    # Per-claim verification enters as a multiplier rather than a fourth
+    # weighted term. An answer that cites correctly and then states a threshold
+    # the sources never mention should not be rescued by strong retrieval and
+    # good corroboration — those are exactly the conditions under which a
+    # fabricated specific is most believable. Floored at 0.4 so a single
+    # unmatched atom degrades toward escalation instead of zeroing the score.
+    support = max(0.4, output.claim_support)
+
     return round(
-        (0.45 * retrieval + 0.25 * corroboration + 0.30 * grounding) * penalty, 4
+        (0.45 * retrieval + 0.25 * corroboration + 0.30 * grounding) * penalty * support, 4
     )
 
 
