@@ -16,7 +16,12 @@ import re
 
 import pytest
 
-from aiops.ingestion.corpus import DOCUMENTS, ERROR_CATALOG, expansion_catalog
+from aiops.ingestion.corpus import (
+    DOCUMENTS,
+    ERROR_CATALOG,
+    expansion_catalog,
+    full_catalog,
+)
 from aiops.ingestion.expansion import all_services, render_all
 from aiops.ingestion.expansion.decisions import DECISIONS
 from aiops.ingestion.expansion.incidents import GUIDES, INCIDENTS
@@ -160,9 +165,28 @@ def test_catalog_covers_every_expansion_code(faults):
 
 
 def test_catalog_has_no_duplicates_across_original_and_expansion():
-    combined = ERROR_CATALOG + expansion_catalog()
-    codes = [e.code for e in combined]
+    codes = [e.code for e in full_catalog()]
     assert len(codes) == len(set(codes))
+
+
+def test_seeded_database_contains_every_code(tmp_path):
+    """Regression: `seed_error_catalog` defaulted to the 7 canonical entries.
+
+    Every expansion runbook was retrievable while the deterministic lookup tool
+    reported its code as unknown — the exact half-answer the catalog exists to
+    prevent. Asserting the builder was not enough; this asserts what actually
+    reaches the database.
+    """
+    from aiops.knowledge.catalog import lookup_error_code, seed_error_catalog
+
+    db = tmp_path / "catalog.db"
+    seeded = seed_error_catalog(db_path=db)
+    assert seeded == len(full_catalog())
+    assert seeded > len(ERROR_CATALOG), "seeding fell back to the canonical subset"
+
+    # spot-check one code from each layer resolves through the real lookup path
+    for code in ("PAY-5021", "MET-6601", "LED-1001"):
+        assert lookup_error_code(code, db_path=db) is not None, f"{code} not resolvable"
 
 
 def test_catalog_runbook_refs_point_at_real_documents(docs):

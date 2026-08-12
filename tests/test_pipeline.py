@@ -36,8 +36,14 @@ def tmp_db(tmp_path, monkeypatch):
 
 
 def test_error_catalog_roundtrip(tmp_db):
+    # Asserted against the catalog itself rather than a literal count, so adding
+    # an error code does not fail an unrelated test. The count *is* still worth
+    # asserting: seeding silently fell back to the 7 canonical codes once, which
+    # left every expansion runbook retrievable but unresolvable by the SQL tool.
+    from aiops.ingestion.corpus import full_catalog
+
     n = catalog.seed_error_catalog(db_path=tmp_db)
-    assert n == 7
+    assert n == len(full_catalog())
     entry = catalog.lookup_error_code("PAY-5021", db_path=tmp_db)
     assert entry is not None
     assert entry.service == "payment-service"
