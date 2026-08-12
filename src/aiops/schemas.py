@@ -43,6 +43,15 @@ class RetrievedChunk(BaseModel):
     lexical_score: float = 0.0
     score: float = 0.0
     rank: int = 0
+    # Raw cross-encoder logit, kept alongside the fused score so the reranker's
+    # contribution stays inspectable in the UI and the trace rather than being
+    # folded invisibly into `score`.
+    rerank_score: float | None = None
+    # How this chunk entered the context: first-stage retrieval, a trace-id
+    # expansion, or a cross-reference hop. Surfaced so a multi-hop answer can
+    # show which evidence was reached indirectly.
+    provenance: str = "retrieval"
+    hop: int = 0
 
 
 class LogRecord(BaseModel):
