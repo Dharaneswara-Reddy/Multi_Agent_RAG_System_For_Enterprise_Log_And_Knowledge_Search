@@ -66,6 +66,9 @@ class CopilotState(TypedDict, total=False):
     answer: str
     confidence: float
     verdict: str
+    # self-correction: which attempt this is, and why the previous one failed
+    attempt: int
+    retry_reason: str
     # accumulated
     steps: Annotated[list[AgentStep], _merge_steps]
     guardrail_notes: Annotated[list[str], _merge_notes]
@@ -128,13 +131,31 @@ class Copilot:
         }
 
     def _retrieve(self, state: CopilotState, source_types: list[str] | None) -> AssembledContext:
-        hits = self.index.search(
-            state.get("search_query") or state["question"],
+        """Full pipeline: multi-query -> fuse -> rerank -> hop -> assemble.
+
+        On a retry attempt the query is deliberately broadened: the service and
+        source-type filters are dropped and the raw question is used instead of
+        triage's rewrite. The most common reason a first attempt finds nothing
+        is that triage guessed the wrong service or over-narrowed the query, so
+        repeating the same constrained search would fail the same way.
+        """
+        from aiops.retrieval.pipeline import retrieve as run_pipeline
+
+        attempt = state.get("attempt", 0)
+        broadened = attempt > 0
+
+        hits, rtrace = run_pipeline(
+            state["question"] if broadened else (state.get("search_query") or state["question"]),
+            self.index,
             top_k=settings.top_k,
-            services=state.get("services") or None,
-            source_types=source_types,
+            services=None if broadened else (state.get("services") or None),
+            source_types=None if broadened else source_types,
         )
-        return assemble(hits, self.index)
+        ctx = assemble(hits, self.index)
+        ctx.retrieval_stages = rtrace.stages
+        ctx.query_variants = rtrace.variants
+        ctx.reference_hops = rtrace.hops
+        return ctx
 
     def _knowledge_agent(self, state: CopilotState) -> dict[str, Any]:
         with tr.span("agent.knowledge", **{tr.GEN_AI_AGENT_NAME: "knowledge"}) as sp:
@@ -285,6 +306,47 @@ class Copilot:
             ],
         }
 
+    @staticmethod
+    def _route_after_gate(state: CopilotState) -> str:
+        """Loop back to triage on a retry, otherwise finish.
+
+        The gate signals a retry by returning no verdict. Any terminal verdict
+        ends the run, so a state that somehow reaches here without one still
+        terminates via the attempt ceiling rather than spinning.
+        """
+        if state.get("verdict"):
+            return END
+        return "triage" if state.get("attempt", 0) <= settings.max_retries else END
+
+    @staticmethod
+    def _retry_would_help(state: CopilotState, out: gr.OutputCheck) -> bool:
+        """Is this failure the kind a broader query could fix?
+
+        Retrying costs a full synthesis, so it is gated on the failure having a
+        plausible retrieval cause. Two signals qualify:
+
+        - the context was thin or empty, which a narrowed filter commonly causes;
+        - the question named services or codes that triage filtered on, so
+          dropping those filters materially changes the search.
+
+        A well-retrieved question that simply is not covered by the corpus does
+        not qualify — the honest response there is to escalate, and retrying
+        would only spend money to reach the same conclusion.
+        """
+        ctx = state.get("context")
+        if ctx is None or ctx.is_empty:
+            return True
+        # independent_sources, not distinct_sources: hop and trace expansions are
+        # derived from what was retrieved, so counting them here would let the
+        # pipeline's own expansion talk it out of retrying a thin result.
+        if ctx.independent_sources < 2:
+            return True
+        if state.get("services") or state.get("error_codes"):
+            return True
+        # Answer cited nothing usable despite a populated context: worth one
+        # broader attempt.
+        return not out.cited_refs
+
     def _guardrail_gate(self, state: CopilotState) -> dict[str, Any]:
         if state.get("verdict") == Verdict.BLOCKED.value:
             return {"confidence": 0.0}
@@ -295,18 +357,20 @@ class Copilot:
         ctx = state.get("context")
 
         with tr.span("guardrail.output") as sp:
-            out = gr.check_output(answer, allowed)
+            # Passing the context text switches on per-claim verification: not
+            # just "are these citations real" but "does the context actually
+            # contain the specifics this answer asserts".
+            out = gr.check_output(answer, allowed, context_text=ctx.text if ctx else None)
+            # Only retrieval-reached documents count as corroboration; hop and
+            # trace expansions are derived from those and are not independent.
+            independent = ctx.independent_sources if ctx else 0
             confidence = gr.score_confidence(
                 top_dense=ctx.top_dense if ctx else 0.0,
-                distinct_sources=len({c.ref.split("#")[0] for c in citations}),
+                distinct_sources=independent,
                 output=out,
                 context_empty=not citations,
             )
-            decision = gr.decide_escalation(
-                confidence,
-                out,
-                distinct_sources=len({c.ref.split("#")[0] for c in citations}),
-            )
+            decision = gr.decide_escalation(confidence, out, distinct_sources=independent)
             if state.get("needs_human") and not decision.escalate:
                 decision = gr.EscalationDecision(
                     True, "question requests a destructive action", confidence
@@ -315,8 +379,46 @@ class Copilot:
             sp.set_attribute(tr.AIOPS_VERDICT, Verdict.ESCALATED.value if decision.escalate else Verdict.ANSWERED.value)
 
         notes = [str(f) for f in out.findings]
+        attempt = state.get("attempt", 0)
+
+        # Self-correction. A weak answer is retried once with a broadened query
+        # before it is handed to a human, because the most common cause of a
+        # weak first attempt is triage over-narrowing (wrong service filter, an
+        # over-specific rewritten query) rather than the corpus lacking the
+        # answer.
+        #
+        # Two things keep this from being a loop that papers over real failure:
+        # the attempt budget is hard, and a retry is only allowed when the
+        # failure looks *recoverable*. A blocked output or an injection attempt
+        # is not retried — retrying a blocked answer is how a guardrail gets
+        # worn down by repetition.
+        if (
+            decision.escalate
+            and attempt < settings.max_retries
+            and not out.blocked
+            and not state.get("needs_human")
+            and self._retry_would_help(state, out)
+        ):
+            sp.set_attribute(tr.AIOPS_VERDICT, "retry")
+            return {
+                "attempt": attempt + 1,
+                "retry_reason": decision.reason,
+                "guardrail_notes": [
+                    f"[info] attempt {attempt + 1}: retrying with a broadened query "
+                    f"({decision.reason})"
+                ],
+                "steps": [
+                    AgentStep(
+                        agent="self-correction",
+                        summary=f"attempt {attempt} weak ({decision.reason}); broadening query",
+                    )
+                ],
+            }
+
         if decision.escalate:
             notes.append(f"[warn] escalated: {decision.reason}")
+            if attempt:
+                notes.append(f"[info] escalated after {attempt + 1} attempts")
 
         # Keep only citations the answer actually used, so the UI shows evidence
         # rather than everything retrieved.
@@ -369,7 +471,14 @@ class Copilot:
             g.add_edge(node, "catalog")
         g.add_edge("catalog", "synthesize")
         g.add_edge("synthesize", "gate")
-        g.add_edge("gate", END)
+        # The one cycle in the graph. `_route_after_gate` returns "triage" only
+        # while the attempt budget allows, so termination is guaranteed by the
+        # counter rather than by hoping the model stops asking.
+        g.add_conditional_edges(
+            "gate",
+            self._route_after_gate,
+            {"triage": "triage", END: END},
+        )
         return g.compile()
 
     # -- entry point -------------------------------------------------------
