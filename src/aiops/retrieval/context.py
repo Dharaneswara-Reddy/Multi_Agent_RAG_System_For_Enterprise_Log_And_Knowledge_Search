@@ -36,6 +36,11 @@ class AssembledContext:
     # Raw cosine of the best hit. This is the one comparable across queries, so
     # it is what the confidence heuristic reads.
     top_dense: float = 0.0
+    # Pipeline provenance, surfaced in the UI and on the span so a responder can
+    # see how evidence was reached rather than only what was reached.
+    retrieval_stages: list[str] = field(default_factory=list)
+    query_variants: list[str] = field(default_factory=list)
+    reference_hops: int = 0
 
     @property
     def is_empty(self) -> bool:
@@ -44,6 +49,21 @@ class AssembledContext:
     @property
     def distinct_sources(self) -> int:
         return len({r.chunk.doc_id for r in self.used})
+
+    @property
+    def independent_sources(self) -> int:
+        """Distinct documents reached by retrieval, excluding derived evidence.
+
+        Confidence uses corroboration — several sources agreeing — as evidence
+        of reliability. A document pulled in *because another document cited
+        it* is not independent corroboration; it is the same evidence followed
+        one edge further. Counting hops here would let the confidence score
+        reward itself for expanding, which is circular.
+
+        Trace expansions are excluded for the same reason: sibling log lines
+        from one trace are one event, not several sources agreeing.
+        """
+        return len({r.chunk.doc_id for r in self.used if r.hop == 0 and r.rank != 999})
 
 
 def assemble(
