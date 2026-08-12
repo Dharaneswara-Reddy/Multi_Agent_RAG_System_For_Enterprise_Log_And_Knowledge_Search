@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from aiops.evaluation.harness import (
     check_thresholds,
-    evaluate_retrieval,
     load_golden,
     run_all,
 )
@@ -95,8 +94,9 @@ def sweep() -> None:
             index = HybridIndex()
             index.build(chunks)
             for weight in (0.35, 0.5, 0.65, 0.8, 1.0):
-                _, summary = evaluate_retrieval(cases, index=index)
-                # dense_weight is read per-search, so re-score with an override
+                # dense_weight is read per-search, so score with an explicit
+                # override rather than through evaluate_retrieval, which would
+                # use the configured weight and answer the wrong question.
                 results = []
                 for case in cases:
                     if not case.relevant_docs:
