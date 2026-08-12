@@ -213,6 +213,27 @@ with tab_ask:
                     unsafe_allow_html=True,
                 )
 
+            # Retrieval provenance. Which stages ran and what each contributed is
+            # the difference between "the system found this" and "the system
+            # found this because a runbook cited it" — a responder judging
+            # whether to trust an answer needs the second.
+            pipeline = answer.extras.get("retrieval_pipeline") or {}
+            if pipeline:
+                st.markdown("#### Retrieval pipeline")
+                stages = " → ".join(pipeline.get("stages") or []) or "single-pass"
+                st.markdown(f"<span class='mono'>{stages}</span>", unsafe_allow_html=True)
+                variants = pipeline.get("variants") or []
+                if len(variants) > 1:
+                    with st.expander(f"{len(variants)} query formulations"):
+                        for v in variants:
+                            st.markdown(f"<span class='mono'>· {v}</span>", unsafe_allow_html=True)
+                if pipeline.get("hops"):
+                    st.markdown(
+                        f"<span class='mono'>🔗 {pipeline['hops']} cross-reference hop(s)"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
+
             if answer.guardrail_notes:
                 st.markdown("#### Guardrails")
                 for n in answer.guardrail_notes:

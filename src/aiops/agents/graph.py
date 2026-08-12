@@ -38,6 +38,25 @@ from aiops.retrieval.index import HybridIndex, get_index
 from aiops.schemas import AgentStep, Citation, CopilotAnswer, Verdict
 
 
+def _pipeline_summary(ctx) -> dict[str, Any]:
+    """Retrieval provenance for the UI, the API, and the audit record.
+
+    Kept out of the answer text on purpose: a responder deciding whether to
+    trust an answer needs to know that a source arrived via a cross-reference
+    hop rather than direct retrieval, but that belongs beside the answer, not
+    inside it.
+    """
+    if ctx is None:
+        return {}
+    return {
+        "stages": list(getattr(ctx, "retrieval_stages", []) or []),
+        "variants": list(getattr(ctx, "query_variants", []) or []),
+        "hops": getattr(ctx, "reference_hops", 0),
+        "trace_expansions": getattr(ctx, "trace_expansions", 0),
+        "independent_sources": getattr(ctx, "independent_sources", 0),
+    }
+
+
 def _merge_steps(left: list[AgentStep], right: list[AgentStep]) -> list[AgentStep]:
     return (left or []) + (right or [])
 
@@ -69,6 +88,8 @@ class CopilotState(TypedDict, total=False):
     # self-correction: which attempt this is, and why the previous one failed
     attempt: int
     retry_reason: str
+    # per-claim verification findings, surfaced beside the answer
+    unsupported_claims: list[str]
     # accumulated
     steps: Annotated[list[AgentStep], _merge_steps]
     guardrail_notes: Annotated[list[str], _merge_notes]
@@ -375,11 +396,30 @@ class Copilot:
                 decision = gr.EscalationDecision(
                     True, "question requests a destructive action", confidence
                 )
+            attempt = state.get("attempt", 0)
+            # Decided inside the span so the attribute lands on a live span —
+            # setting one after the context manager exits is silently dropped
+            # by the SDK with a warning, which is exactly the kind of hole that
+            # makes a trace lie about what happened.
+            will_retry = (
+                decision.escalate
+                and attempt < settings.max_retries
+                and not out.blocked
+                and not state.get("needs_human")
+                and self._retry_would_help(state, out)
+            )
+
             sp.set_attribute(tr.AIOPS_CONFIDENCE, confidence)
-            sp.set_attribute(tr.AIOPS_VERDICT, Verdict.ESCALATED.value if decision.escalate else Verdict.ANSWERED.value)
+            sp.set_attribute(
+                tr.AIOPS_VERDICT,
+                "retry"
+                if will_retry
+                else (Verdict.ESCALATED.value if decision.escalate else Verdict.ANSWERED.value),
+            )
+            sp.set_attribute("aiops.attempt", attempt)
+            sp.set_attribute("aiops.claim_support", round(out.claim_support, 4))
 
         notes = [str(f) for f in out.findings]
-        attempt = state.get("attempt", 0)
 
         # Self-correction. A weak answer is retried once with a broadened query
         # before it is handed to a human, because the most common cause of a
@@ -389,17 +429,10 @@ class Copilot:
         #
         # Two things keep this from being a loop that papers over real failure:
         # the attempt budget is hard, and a retry is only allowed when the
-        # failure looks *recoverable*. A blocked output or an injection attempt
-        # is not retried — retrying a blocked answer is how a guardrail gets
-        # worn down by repetition.
-        if (
-            decision.escalate
-            and attempt < settings.max_retries
-            and not out.blocked
-            and not state.get("needs_human")
-            and self._retry_would_help(state, out)
-        ):
-            sp.set_attribute(tr.AIOPS_VERDICT, "retry")
+        # failure looks *recoverable* (see `_retry_would_help`). A blocked
+        # output or a destructive request is never retried — retrying a blocked
+        # answer is how a guardrail gets worn down by repetition.
+        if will_retry:
             return {
                 "attempt": attempt + 1,
                 "retry_reason": decision.reason,
@@ -430,6 +463,7 @@ class Copilot:
             "verdict": (Verdict.ESCALATED if decision.escalate else Verdict.ANSWERED).value,
             "citations": shown,
             "guardrail_notes": notes,
+            "unsupported_claims": out.unsupported_claims,
             "steps": [
                 AgentStep(
                     agent="guardrails",
@@ -541,6 +575,10 @@ class Copilot:
                     "cost_by_route": {k: round(v, 6) for k, v in self._ledger.by_route.items()},
                     "error_codes": final.get("error_codes", []),
                     "services": final.get("services", []),
+                    "attempts": final.get("attempt", 0) + 1,
+                    "retry_reason": final.get("retry_reason", ""),
+                    "retrieval_pipeline": _pipeline_summary(final.get("context")),
+                    "unsupported_claims": final.get("unsupported_claims", []),
                 },
             )
 
