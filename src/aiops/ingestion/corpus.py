@@ -522,6 +522,51 @@ Page the Payments on-call. If reconciliation shows captured-but-unrecorded
 charges, also notify Finance within one hour — this is a regulatory reporting
 obligation.
 """,
+    "RB-ORDER-SAGA.md": """---
+title: "Runbook: Order stuck in PENDING_PAYMENT (ORD-4102)"
+source_type: runbook
+service: order-service
+error_codes: [ORD-4102, PAY-5021]
+---
+
+# Runbook: Orders stuck in PENDING_PAYMENT
+
+`ORD-4102` means the checkout saga asked payment-service to authorize and got
+no terminal answer within 3.2s. The order is left in `PENDING_PAYMENT` — not
+`FAILED` — because at that moment we genuinely do not know whether the customer
+was charged.
+
+## When this fires
+Almost always downstream of `PAY-5021`. Take the trace id and check
+payment-service first; if you see PAY-5021 on the same trace, this is a symptom
+and the payment incident is the one to work.
+
+## First five minutes
+1. Count the affected orders: `bin/saga-list --state PENDING_PAYMENT --since 1h`.
+2. Check whether payment-service is still timing out. If it is, do nothing to
+   the orders yet — they will keep accumulating and resolving them individually
+   wastes the window.
+3. Confirm the saga coordinator is healthy: a stuck coordinator produces the
+   same symptom with no PAY-5021 at all, and that is a different problem.
+
+## Resolution — reconcile before you drive
+Run `bin/reconcile-charges --window=2h` first. Only once reconciliation has
+established the true payment state should you run
+`bin/saga-drive --state PENDING_PAYMENT`, which completes orders that were paid
+and compensates those that were not.
+
+## What not to do
+Never mark these orders `FAILED` in bulk and re-run the checkout replay. The
+processor may have captured the charge, and replaying captures it a second
+time — this is exactly how INC-2025-1103 double-charged 1,842 customers.
+
+A timeout is not evidence that nothing happened. It is evidence that we did not
+hear back.
+
+## Escalation
+Page Commerce on-call. If reconciliation finds captured-but-unrecorded charges,
+Payments and Finance both need to know within the hour.
+""",
     "RB-INVENTORY-POOL.md": """---
 title: "Runbook: Inventory connection pool exhaustion (INV-3007)"
 source_type: runbook

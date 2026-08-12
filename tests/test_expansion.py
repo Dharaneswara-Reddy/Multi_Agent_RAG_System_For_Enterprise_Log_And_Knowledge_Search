@@ -194,6 +194,23 @@ def test_catalog_runbook_refs_point_at_real_documents(docs):
         assert f"{entry.runbook_ref}.md" in docs
 
 
+def test_every_catalog_runbook_ref_resolves_including_canonical(docs):
+    """No catalog row may cite a runbook that was never written.
+
+    Regression: ORD-4102 pointed at RB-ORDER-SAGA, which did not exist. The SQL
+    lookup tool would answer a question about stuck orders by telling an
+    engineer to consult a document that is not there — worse than saying
+    nothing, because it reads as authoritative.
+    """
+    available = set(docs) | set(DOCUMENTS)
+    dangling = [
+        (e.code, e.runbook_ref)
+        for e in full_catalog()
+        if e.runbook_ref and f"{e.runbook_ref}.md" not in available
+    ]
+    assert not dangling, f"catalog cites missing runbooks: {dangling}"
+
+
 def test_expansion_does_not_collide_with_canonical_documents(docs):
     """The 18 hand-written documents must survive corpus generation intact."""
     assert not set(docs) & set(DOCUMENTS)
