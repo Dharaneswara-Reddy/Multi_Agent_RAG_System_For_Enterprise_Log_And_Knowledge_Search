@@ -285,26 +285,36 @@ def check_output(
 # 3. Escalation policy
 # --------------------------------------------------------------------------
 
-# Measured on this corpus + bge-small-en-v1.5 by scripts/calibrate.py, at the
-# tuned chunk size (320 tokens). Off-corpus questions peak at 0.554; on-corpus
-# questions bottom out at 0.602 — a separation of 0.048.
+# Measured by scripts/calibrate.py against the **full production pipeline**
+# (multi-query -> fuse -> rerank -> hop), not against bare index search.
+# Off-corpus questions peak at 0.597; on-corpus questions bottom out at 0.619 —
+# a separation of 0.022.
 #
-# That separation is much narrower than the 0.153 measured on the 18-document
-# corpus, and the honest reading is that the old figure was flattering rather
-# than that anything regressed. Two things changed together: the corpus grew to
-# 219 documents, and the probe set grew from 12 questions covering seven
-# services to 24 covering all 42. The old probes only ever asked about the
-# corpus's densest, best-covered region.
+# The band has narrowed twice, and both moves are real rather than regressions:
 #
-# The practical consequence is that the floor had to come *down*, from 0.64 to
-# 0.58. At 0.64 the floor now sits above the on-corpus minimum of 0.602, so
-# legitimate questions about thinly-covered services would score as
-# low-relevance and over-escalate. A narrower band is a real cost of scale: the
-# more the corpus contains, the less a single cosine score distinguishes
-# "covered" from "not covered", which is the argument for the corroboration and
-# grounding terms carrying weight alongside it.
-RELEVANCE_FLOOR = 0.58
-RELEVANCE_CEIL = 0.85
+#   18-doc corpus, 12 probes, single-query : 0.153
+#   219-doc corpus, 24 probes, single-query: 0.048
+#   219-doc corpus, 24 probes, full pipeline: 0.022
+#
+# The first narrowing was mostly corpus growth plus an honest probe set — the
+# original probes only asked about the best-covered services. The second is a
+# direct consequence of better retrieval: a pipeline that tries four query
+# formulations and reranks finds the best available match for *any* question,
+# including one the corpus cannot answer. Retrieval quality and
+# out-of-scope detectability pull against each other, and this is what that
+# trade-off looks like when it is measured instead of assumed.
+#
+# The floor therefore had to move *up* to 0.61 (0.58 now sits below the 0.597
+# off-corpus peak, which is exactly how "who won the 1998 world cup" started
+# getting answered instead of escalated).
+#
+# A 0.022 margin is thin enough that the cosine term alone should not be
+# trusted to carry escalation, which is why confidence composes corroboration,
+# citation grounding, and per-claim verification alongside it. Re-run the
+# calibration after *any* retrieval change, not just an embedding or corpus
+# change — the pipeline is now part of what these constants describe.
+RELEVANCE_FLOOR = 0.61
+RELEVANCE_CEIL = 0.84
 
 
 @dataclass
