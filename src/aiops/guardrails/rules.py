@@ -250,12 +250,25 @@ def check_output(answer: str, allowed_refs: list[str]) -> OutputCheck:
 # --------------------------------------------------------------------------
 
 # Measured on this corpus + bge-small-en-v1.5 by scripts/calibrate.py, at the
-# tuned chunk size (160 tokens). Off-corpus questions peak at 0.566; on-corpus
-# questions bottom out at 0.719 — a separation of 0.153, more than double what
-# the pre-tuning 320-token chunking gave (0.070). Smaller chunks sharpened the
-# escalation boundary as well as recall.
-RELEVANCE_FLOOR = 0.64
-RELEVANCE_CEIL = 0.86
+# tuned chunk size (320 tokens). Off-corpus questions peak at 0.554; on-corpus
+# questions bottom out at 0.602 — a separation of 0.048.
+#
+# That separation is much narrower than the 0.153 measured on the 18-document
+# corpus, and the honest reading is that the old figure was flattering rather
+# than that anything regressed. Two things changed together: the corpus grew to
+# 219 documents, and the probe set grew from 12 questions covering seven
+# services to 24 covering all 42. The old probes only ever asked about the
+# corpus's densest, best-covered region.
+#
+# The practical consequence is that the floor had to come *down*, from 0.64 to
+# 0.58. At 0.64 the floor now sits above the on-corpus minimum of 0.602, so
+# legitimate questions about thinly-covered services would score as
+# low-relevance and over-escalate. A narrower band is a real cost of scale: the
+# more the corpus contains, the less a single cosine score distinguishes
+# "covered" from "not covered", which is the argument for the corroboration and
+# grounding terms carrying weight alongside it.
+RELEVANCE_FLOOR = 0.58
+RELEVANCE_CEIL = 0.85
 
 
 @dataclass
