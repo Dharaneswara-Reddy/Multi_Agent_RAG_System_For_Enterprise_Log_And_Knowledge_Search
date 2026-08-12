@@ -125,13 +125,21 @@ class HybridIndex:
         source_types: list[str] | None = None,
         error_codes: list[str] | None = None,
         dense_weight: float | None = None,
+        fusion: str | None = None,
     ) -> list[RetrievedChunk]:
-        """Hybrid search.
+        """First-stage hybrid search. Returns `top_k` fused candidates.
 
-        Dense and lexical scores are min-max normalised *within this query's
-        candidate set* before blending. Raw BM25 scores are unbounded and
-        corpus-dependent, so blending them against cosine without normalising
-        makes the weight meaningless.
+        Two fusion modes, both swept rather than assumed:
+
+        - `blend` min-max normalises dense and lexical scores *within this
+          query's candidate set* before a weighted sum. Raw BM25 scores are
+          unbounded and corpus-dependent, so blending them against cosine
+          without normalising makes the weight meaningless.
+        - `rrf` fuses ranks instead of scores, which sidesteps normalisation
+          entirely and is robust to the two scorers disagreeing about scale.
+
+        This is stage one only. `retrieve()` is the full pipeline and is what
+        production paths should call.
         """
         if not self.chunks:
             return []
@@ -153,16 +161,27 @@ class HybridIndex:
             dense = np.where(mask, dense, -np.inf)
             lexical = np.where(mask, lexical, -np.inf)
 
-        blended = _minmax(dense) * dense_weight + _minmax(lexical) * (1.0 - dense_weight)
+        fusion = fusion or settings.fusion
+        if fusion == "rrf":
+            # RRF fuses *ranks*, not scores, so it needs no normalisation and is
+            # unaffected by the two scorers' wildly different score
+            # distributions. Its scores are ~1/k and tiny by construction, so
+            # min_score (a blend-scale threshold) does not apply.
+            blended = _rrf(dense, lexical, dense_weight, settings.rrf_k)
+            floor = -np.inf
+        else:
+            blended = _minmax(dense) * dense_weight + _minmax(lexical) * (1.0 - dense_weight)
+            floor = settings.min_score
 
-        k = min(settings.candidate_k, len(self.chunks))
+        # Partition over a pool at least as large as the requested cut.
+        k = min(max(top_k, 1), len(self.chunks))
         idx = np.argpartition(-blended, k - 1)[:k]
         idx = idx[np.argsort(-blended[idx])]
 
         out: list[RetrievedChunk] = []
         for rank, i in enumerate(idx[:top_k]):
             score = float(blended[i])
-            if score < settings.min_score:
+            if score < floor:
                 continue
             out.append(
                 RetrievedChunk(
@@ -174,6 +193,43 @@ class HybridIndex:
                 )
             )
         return out
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        services: list[str] | None = None,
+        source_types: list[str] | None = None,
+        error_codes: list[str] | None = None,
+        dense_weight: float | None = None,
+        fusion: str | None = None,
+        rerank: bool | None = None,
+    ) -> list[RetrievedChunk]:
+        """The full two-stage pipeline: fuse to `candidate_k`, rerank to `top_k`.
+
+        This is what every production path should call. `search()` remains
+        available as stage one alone, which is what makes it possible to
+        measure the reranker's contribution rather than assume it.
+        """
+        from aiops.retrieval.rerank import maybe_rerank
+
+        top_k = top_k or settings.top_k
+        use_rerank = settings.rerank_enabled if rerank is None else rerank
+        pool = max(top_k, settings.candidate_k) if use_rerank else top_k
+
+        candidates = self.search(
+            query,
+            top_k=pool,
+            services=services,
+            source_types=source_types,
+            error_codes=error_codes,
+            dense_weight=dense_weight,
+            fusion=fusion,
+        )
+        if not use_rerank:
+            return candidates[:top_k]
+        return maybe_rerank(query, candidates, top_k=top_k)
 
     def get(self, chunk_id: str) -> Chunk | None:
         for c in self.chunks:
@@ -222,6 +278,43 @@ def _minmax(scores: np.ndarray) -> np.ndarray:
         return np.where(np.isfinite(scores), 1.0, 0.0).astype(np.float32)
     out = (scores - lo) / (hi - lo)
     return np.where(np.isfinite(out), out, 0.0).astype(np.float32)
+
+
+def _rrf(
+    dense: np.ndarray, lexical: np.ndarray, dense_weight: float, rrf_k: int
+) -> np.ndarray:
+    """Reciprocal rank fusion: score = sum over rankers of w / (rrf_k + rank).
+
+    RRF discards the magnitudes entirely and keeps only the ordering each
+    retriever produced. That is the whole point — cosine similarity and BM25
+    live on incomparable scales, and any weighted sum of their *scores*
+    silently depends on how those scales happen to sit for a given query.
+    Ranks have no such problem.
+
+    `rrf_k` damps the contribution of top ranks; 60 is the constant from
+    Cormack et al. (2009) and is left configurable rather than inlined because
+    it is swept.
+
+    The weighting is a deviation from textbook RRF, which treats every retriever
+    equally. It is kept because the sweep found the optimal dense/lexical split
+    is genuinely not 50/50 on this corpus, and discarding that finding to match
+    the textbook would cost measurable recall.
+    """
+    scores = np.zeros_like(dense, dtype=np.float32)
+    for arr, weight in ((dense, dense_weight), (lexical, 1.0 - dense_weight)):
+        if weight <= 0:
+            continue
+        finite = np.isfinite(arr)
+        if not finite.any():
+            continue
+        # argsort of -arr gives the index order; ranking that gives each
+        # element's 0-based rank in one pass.
+        order = np.argsort(-np.where(finite, arr, -np.inf))
+        ranks = np.empty(len(arr), dtype=np.int64)
+        ranks[order] = np.arange(len(arr))
+        contribution = weight / (rrf_k + ranks + 1)
+        scores += np.where(finite, contribution, 0.0).astype(np.float32)
+    return scores
 
 
 _INDEX: HybridIndex | None = None
