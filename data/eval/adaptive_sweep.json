@@ -1,0 +1,107 @@
+[
+  {
+    "class": "conceptual",
+    "n": 26,
+    "dense_weight": 0.35,
+    "recall": 0.9615,
+    "mrr": 0.8782
+  },
+  {
+    "class": "conceptual",
+    "n": 26,
+    "dense_weight": 0.5,
+    "recall": 0.9615,
+    "mrr": 0.9038
+  },
+  {
+    "class": "conceptual",
+    "n": 26,
+    "dense_weight": 0.65,
+    "recall": 0.9744,
+    "mrr": 0.8731
+  },
+  {
+    "class": "conceptual",
+    "n": 26,
+    "dense_weight": 0.8,
+    "recall": 0.9359,
+    "mrr": 0.8718
+  },
+  {
+    "class": "conceptual",
+    "n": 26,
+    "dense_weight": 1.0,
+    "recall": 0.8782,
+    "mrr": 0.8718
+  },
+  {
+    "class": "identifier",
+    "n": 3,
+    "dense_weight": 0.35,
+    "recall": 1.0,
+    "mrr": 0.4167
+  },
+  {
+    "class": "identifier",
+    "n": 3,
+    "dense_weight": 0.5,
+    "recall": 1.0,
+    "mrr": 0.8333
+  },
+  {
+    "class": "identifier",
+    "n": 3,
+    "dense_weight": 0.65,
+    "recall": 1.0,
+    "mrr": 0.8333
+  },
+  {
+    "class": "identifier",
+    "n": 3,
+    "dense_weight": 0.8,
+    "recall": 1.0,
+    "mrr": 0.8333
+  },
+  {
+    "class": "identifier",
+    "n": 3,
+    "dense_weight": 1.0,
+    "recall": 0.6667,
+    "mrr": 0.5
+  },
+  {
+    "class": "symptom",
+    "n": 59,
+    "dense_weight": 0.35,
+    "recall": 0.8503,
+    "mrr": 0.7831
+  },
+  {
+    "class": "symptom",
+    "n": 59,
+    "dense_weight": 0.5,
+    "recall": 0.9096,
+    "mrr": 0.7862
+  },
+  {
+    "class": "symptom",
+    "n": 59,
+    "dense_weight": 0.65,
+    "recall": 0.935,
+    "mrr": 0.8024
+  },
+  {
+    "class": "symptom",
+    "n": 59,
+    "dense_weight": 0.8,
+    "recall": 0.9266,
+    "mrr": 0.8047
+  },
+  {
+    "class": "symptom",
+    "n": 59,
+    "dense_weight": 1.0,
+    "recall": 0.9011,
+    "mrr": 0.8099
+  }
+]

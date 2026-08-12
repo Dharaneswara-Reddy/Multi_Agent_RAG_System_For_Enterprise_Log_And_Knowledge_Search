@@ -46,7 +46,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 155 tests
+uv run pytest -q                                   # 156 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
@@ -94,19 +94,19 @@ explains them* — which is the entire point of this system. So the corpus has t
 layers:
 
 **1a. Hand-written backbone — "Meridian", a fictional e-commerce platform.**
-Eighteen documents and five correlated incident scenarios, hand-written to be
+Nineteen documents and five correlated incident scenarios, hand-written to be
 *internally consistent*: `PAY-5021` appears in the logs, in the SQL catalog, in
 a runbook, and in a post-mortem, and the payment → order → gateway failure
 cascade shares trace IDs across services. That consistency is what makes
 evaluation possible — a golden question like *"which service failed first?"* has
 a verifiable answer (`payment-service`; the gateway 504s are downstream
-symptoms). These eighteen remain the canonical labelled answers.
+symptoms). These nineteen remain the canonical labelled answers.
 
 **1b. Generated expansion — 201 further documents over 42 more services.**
-Eighteen documents is not enough to make retrieval *hard*, and a corpus that
+Nineteen documents is not enough to make retrieval *hard*, and a corpus that
 small flatters every metric measured on it. The expansion (`ingestion/expansion/`)
 adds 42 services, 66 error codes, 40 ADRs, 33 post-mortems, and 20 cross-cutting
-guides — 219 documents and ~44,000 words in total.
+guides — 220 documents and ~44,000 words in total.
 
 It is generated from typed records rather than written as markdown literals,
 because 200 hand-written near-identical runbooks differ only in noise, which
@@ -288,19 +288,19 @@ Three tiers, deliberately separated by cost and trust level:
 | Behaviour | routing accuracy, injection blocked, out-of-scope escalated | no | ✅ every commit |
 | Answer quality | faithfulness, coverage, citation validity | **yes** | on demand |
 
-Current results (95 golden cases over 219 documents, offline mode, tuned
+Current results (95 golden cases over 220 documents, offline mode, tuned
 configuration):
 
 ```
 RETRIEVAL                      BEHAVIOUR
-  recall@k        0.983          injection blocked        100%
-  precision@k     0.186          out-of-scope escalated   100%
-  MRR             0.863          routing accuracy         (see note)
+  recall@k        0.979          injection blocked        100%
+  precision@k     0.185          out-of-scope escalated   100%
+  MRR             0.851          routing accuracy         (see note)
   hit rate        1.000
 ```
 
-Against the same 95 cases before this work: recall 0.949 → **0.983**, MRR
-0.830 → **0.863**, hit rate 0.989 → **1.000**.
+Against the same 95 cases before this work: recall 0.949 → **0.979**, MRR
+0.830 → **0.851**, hit rate 0.989 → **1.000**.
 
 ### The retrieval pipeline, and what each stage is worth
 
@@ -355,18 +355,74 @@ near-duplicate lists. Real query diversity needs a model that can produce
 measured in CI without a key. The code is kept because that is an untested
 hypothesis; the default is off because the tested path failed.
 
-### Where it is still weak
+### Robustness to how people actually ask
 
-That paraphrase experiment surfaced the system's sharpest limitation, and it is
-worth stating plainly: on conversational phrasing, **recall falls from 0.979 to
-0.600**. The system is markedly better at questions asked in its own vocabulary
-than at questions asked the way someone under pressure actually types. Every
-headline number above is measured on questions I wrote, and that gap is the
-honest size of the bias.
+The golden set is written in the corpus's own vocabulary, because I wrote both.
+`scripts/eval_paraphrase.py` asks the same 20 incidents the way someone under
+pressure types them — *"carts keep emptying themselves when the site gets
+busy"*, *"bots are hammering our login page"* — and measures two different
+things:
 
-`log_evidence` also remains the weakest category at **MRR 0.404** despite
-recall of 0.929 — the right log chunk is found and ranked below its
-near-identical neighbours, which is the one place reranking has not helped much.
+| | conversational | golden set |
+|---|---|---|
+| **primary recall** (the one nominated document) | 0.600 | 0.979 |
+| **evidence-region hit** (any document that answers it) | **0.950** | — |
+| MRR | 0.635 | 0.851 |
+
+**The first version of this experiment reported 0.600 and I published it as the
+headline weakness. That number was partly wrong**, and finding out why produced
+two real bugs:
+
+1. A label pointed at `RB-PAY-5021`, which does not exist — `PAY-5021` is a
+   canonical code whose runbook is `RB-PAYMENT-TIMEOUT`. A broken label reports
+   working retrieval as failure. `extend_golden.py` had validated labels from
+   the start; this benchmark was written later and did not inherit the check.
+2. Chasing that turned up a dangling reference in the shipped corpus: the
+   catalog row for `ORD-4102` cited `RB-ORDER-SAGA`, which was never written.
+   The SQL tool would have sent an engineer to a document that is not there.
+   Both now have tests.
+
+The corrected picture is more useful than the original. **The system lands in
+the right evidence region 19 times out of 20 on conversational phrasing** — it
+is not failing to understand the question. What it does worse is *rank*: MRR
+falls 0.851 → 0.635, so the best document is found but not first. That is a
+precision problem, and a far more tractable one than "cannot handle natural
+language".
+
+The single genuine failure is *"the books don't add up this morning"*, where
+the correct runbook sits at rank 55 with cosine 0.452. The corpus says
+"imbalance" and "debits and credits do not sum to zero"; it never says "the
+books don't add up". That is a vocabulary gap no amount of reranking fixes.
+
+`log_evidence` remains the weakest category at **MRR 0.404** despite recall of
+0.929 — the right log chunk is found and ranked below its near-identical
+neighbours, the one place reranking has not helped much.
+
+### Adaptive retrieval: measured, and not built
+
+The obvious next move is to let the query pick the retrieval plan — BM25-heavy
+for exact error codes, dense-heavy for vague symptoms. `scripts/sweep_adaptive.py`
+splits the golden set into identifier / symptom / conceptual queries and sweeps
+`dense_weight` independently for each:
+
+| class | n | 0.35 | 0.50 | 0.65 | 0.80 | 1.00 |
+|---|---|---|---|---|---|---|
+| identifier | 3 | 1.000 | 1.000 | **1.000** | 1.000 | 0.667 |
+| conceptual | 26 | 0.962 | 0.962 | **0.974** | 0.936 | 0.878 |
+| symptom | 59 | 0.850 | 0.910 | **0.935** | 0.927 | 0.901 |
+
+**Adaptive gain: +0.0000.** Every class is already at or tied for its optimum at
+the global 0.65, so routing would route everything the same way. The one class
+with a different nominal best — identifier queries at 0.35 — already scores
+1.000 at 0.65, so there is no headroom to capture.
+
+The measurement does confirm the *reasoning* behind adaptive retrieval: pure
+dense (1.00) collapses identifier queries to 0.667, exactly as predicted,
+because an error code is an exact token. It is just that a well-chosen fixed
+weight already captures that. A router that always routes the same way is
+complexity with a nice name, so this is not built. It becomes worth revisiting
+if the identifier class grows — n=3 is too small to be confident, and that is a
+limitation of the test rather than a finding.
 
 **Read `precision@k` carefully — its denominator is the number of distinct
 documents surfaced, not `k`.** With 219 documents competing and a mean of 1.41
@@ -531,10 +587,23 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 - **Deploy to Azure AI Foundry.** Deliberately deferred until the local system
   was complete; the orchestrator endpoint is the natural first piece.
-- **Robustness to phrasing.** The largest measured weakness: recall drops
-  0.979 → 0.600 on conversational rephrasings. Deterministic query variants
-  failed to close it. The untested hypothesis is LLM-generated variants, which
-  needs a key and a way to measure it that is not another thing I wrote.
+- **Ranking on conversational queries.** Evidence-region hit is 0.950, so the
+  right region is found; MRR falls 0.851 → 0.635, so it is not found *first*.
+  Deterministic query variants failed to close this. The untested hypothesis is
+  LLM-generated variants, which needs a key and a way to measure it that is not
+  another thing I wrote.
+- **An evaluation set I did not write.** Every number here is measured against
+  questions and labels I authored, which caps how much any of them can be
+  trusted. Independently written queries — ideally from someone who has not
+  read the corpus — would be worth more than another retrieval stage.
+- **Answer-quality evaluation.** The harness knows whether the right evidence
+  was *retrieved*; offline it cannot tell whether the final answer is grounded
+  in it, and reports `n/a` rather than guessing. Per-claim verification is a
+  deterministic floor, not a substitute.
+- **Multi-hop correctness, not just reachability.** Tests assert that hops
+  follow real cross-reference edges. They do not assert that an A→B→C chain is
+  the *causally* right path rather than three documents that happen to cite
+  each other.
 - **A per-route hybrid weight.** `log_evidence` sits at MRR 0.404 — log chunks
   compete with 416 document chunks for eight slots under a blend weight tuned
   for document retrieval. One weight per source type is the cheap next
