@@ -20,7 +20,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from aiops.retrieval.index import get_index
 
+# Probes must sample the whole corpus, not one corner of it. After the corpus
+# grew from 18 to 219 documents the original twelve probes covered only the
+# seven founding services, so the measured floor described a slice rather than
+# the corpus — the second block below covers the expansion.
 ON_CORPUS = [
+    # original hand-written corpus
     "why did checkout fail",
     "how to fix connection pool exhaustion",
     "JWT token not yet valid clock skew",
@@ -33,6 +38,19 @@ ON_CORPUS = [
     "when should I escalate to a human",
     "what index does inventory reservations need",
     "how does the checkout saga handle payment timeouts",
+    # expansion corpus
+    "cart redis memory ceiling eviction",
+    "ledger imbalance compensating entry",
+    "why does fraud scoring fail open",
+    "etcd leader election storm",
+    "metrics cardinality explosion unbounded label",
+    "kafka partition skew consumer lag",
+    "tax provider rate limit 429",
+    "secrets rotation requires restart",
+    "delivery slot oversold capacity",
+    "supplier feed truncated mass deletion",
+    "which operations cannot be undone",
+    "how do I verify a kill switch applied",
 ]
 
 OFF_CORPUS = [
