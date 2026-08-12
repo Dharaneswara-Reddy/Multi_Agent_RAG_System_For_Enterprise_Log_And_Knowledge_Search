@@ -5,6 +5,14 @@ log lines that are *correlated* — a single trace id threads through several
 services, upstream failures arrive before downstream ones, and the error codes
 match rows in the SQL catalog. A retrieval system evaluated on uncorrelated
 random logs looks much better than it is.
+
+The 18 documents defined here as literals are the *canonical* corpus: they are
+hand-written, and they are the labelled answers for the original golden-set
+questions. `aiops.ingestion.expansion` adds a further 201 generated documents
+covering 42 more services. That expansion exists to supply realistic distractor
+pressure — a dozen plausible timeout runbooks that a query for PAY-5021 must
+now be ranked against — so retrieval metrics reflect a genuine ranking problem
+rather than a corpus too small to be confusing.
 """
 
 from __future__ import annotations
@@ -975,12 +983,46 @@ sources, or the question touches customer financial state.
 # --------------------------------------------------------------------------
 
 
+def expansion_catalog() -> list[ErrorCodeEntry]:
+    """The 66 expansion faults as catalog rows.
+
+    The catalog is the SQL-backed lookup the error-code tool queries, so it has
+    to cover every code that appears in a document — otherwise a question about
+    a new service resolves in retrieval but not in the deterministic lookup,
+    which is a confusing half-answer.
+    """
+    from aiops.ingestion.expansion import all_services
+
+    rows: list[ErrorCodeEntry] = []
+    for service in all_services():
+        for fault in service.faults:
+            rows.append(
+                ErrorCodeEntry(
+                    code=fault.code,
+                    service=service.name,
+                    title=fault.title,
+                    severity=fault.severity,  # type: ignore[arg-type]
+                    description=fault.symptom,
+                    likely_causes=list(fault.causes),
+                    remediation=fault.fix,
+                    runbook_ref=f"RB-{fault.code}",
+                )
+            )
+    return rows
+
+
 def generate_corpus(seed: int = 7) -> dict[str, int]:
     """Write docs, logs, and the error catalog to disk. Idempotent for a given seed."""
+    from aiops.ingestion.expansion import render_all
+
     settings.ensure_dirs()
     rng = random.Random(seed)
 
     for name, body in DOCUMENTS.items():
+        (settings.docs_dir / name).write_text(body, encoding="utf-8")
+
+    expansion_docs = render_all()
+    for name, body in expansion_docs.items():
         (settings.docs_dir / name).write_text(body, encoding="utf-8")
 
     incidents = [
@@ -999,16 +1041,19 @@ def generate_corpus(seed: int = 7) -> dict[str, int]:
     log_path = settings.logs_dir / "meridian-platform.log"
     log_path.write_text("\n".join(ln.render() for ln in lines) + "\n", encoding="utf-8")
 
+    full_catalog = ERROR_CATALOG + expansion_catalog()
     catalog_path = settings.data_dir / "error_catalog.json"
     catalog_path.write_text(
-        json.dumps([e.model_dump() for e in ERROR_CATALOG], indent=2), encoding="utf-8"
+        json.dumps([e.model_dump() for e in full_catalog], indent=2), encoding="utf-8"
     )
 
     manifest = {
-        "documents": len(DOCUMENTS),
+        "documents": len(DOCUMENTS) + len(expansion_docs),
+        "canonical_documents": len(DOCUMENTS),
+        "expansion_documents": len(expansion_docs),
         "log_lines": len(lines),
         "incidents": len(incidents),
-        "error_codes": len(ERROR_CATALOG),
+        "error_codes": len(full_catalog),
     }
     (settings.data_dir / "corpus_manifest.json").write_text(
         json.dumps({**manifest, "incidents_detail": [
