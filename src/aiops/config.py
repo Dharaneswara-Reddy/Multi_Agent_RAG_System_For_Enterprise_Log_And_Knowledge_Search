@@ -104,9 +104,27 @@ class Settings(BaseSettings):
     multihop_min_similarity: float = 0.45  # a cited but off-topic document is not evidence
 
     # --- multi-query rewriting ---
-    # Several formulations of the question, fused by RRF. Variants are
-    # deterministic by default so the harness measures this in CI without a key.
-    multiquery_enabled: bool = True
+    # Several formulations of the question, fused by RRF across variants.
+    #
+    # **Off by default, because it was measured and it does not work.** The
+    # cumulative ablation showed no movement at all on the golden set (recall
+    # 0.958 -> 0.958, MRR 0.861 -> 0.860) for +0.3s/query. Suspecting the
+    # golden set was biased — I wrote both the questions and the corpus, so the
+    # questions already use the corpus's vocabulary — it was re-tested on 20
+    # deliberately conversational rephrasings (scripts/eval_paraphrase.py).
+    # Identical result: recall +0.000, MRR +0.000, +0.18s.
+    #
+    # The reason is that the deterministic variants are too *close* to the
+    # original. Stripping stopwords from "carts keep emptying themselves when
+    # the site gets busy" yields nearly the same embedding, so fusing the
+    # variants fuses near-duplicate ranked lists and changes nothing. Genuine
+    # query diversity needs a model that can produce "Redis eviction under
+    # memory pressure" from that sentence, which is `multiquery_use_llm` and
+    # cannot be measured in CI without a key.
+    #
+    # The code is kept rather than deleted because the LLM path is a real and
+    # untested hypothesis, not because the deterministic path deserves defence.
+    multiquery_enabled: bool = False
     multiquery_max_variants: int = 4
     multiquery_use_llm: bool = False  # deterministic variants only unless enabled
     # 0.65 is the sweep optimum, down from 0.80 on the 18-document corpus —
