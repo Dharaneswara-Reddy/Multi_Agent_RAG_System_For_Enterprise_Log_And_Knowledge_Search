@@ -54,7 +54,38 @@ class Settings(BaseSettings):
 
     # --- retrieval ---
     top_k: int = 8
-    candidate_k: int = 30  # pulled before reranking
+    candidate_k: int = 30  # first-stage pool handed to the reranker
+
+    # --- reranking (stage 2) ---
+    # A bi-encoder scores query and chunk independently; a cross-encoder reads
+    # them together and is far more accurate at ranking. Too slow for the whole
+    # corpus, which is why it runs over candidate_k only.
+    rerank_enabled: bool = True
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"  # 80MB, ONNX/CPU
+    # 1.0 = the reranker decides outright. Swept; see README.
+    rerank_blend: float = 1.0
+
+    # --- fusion ---
+    # "blend" = min-max normalised weighted sum of dense and BM25 scores.
+    # "rrf"   = reciprocal rank fusion, which ignores scores and uses ranks.
+    fusion: str = "rrf"
+    rrf_k: int = 60  # RRF damping constant; 60 is the value from the original paper
+
+    # --- multi-hop retrieval ---
+    # Follows explicit cross-references (error codes, ADR and incident ids) out
+    # of retrieved chunks. Hops are corroboration and are damped below every
+    # direct hit, so they cannot change what an answer is about.
+    multihop_enabled: bool = True
+    multihop_max_hops: int = 1
+    multihop_per_hop_cap: int = 3
+    multihop_min_similarity: float = 0.45  # a cited but off-topic document is not evidence
+
+    # --- multi-query rewriting ---
+    # Several formulations of the question, fused by RRF. Variants are
+    # deterministic by default so the harness measures this in CI without a key.
+    multiquery_enabled: bool = True
+    multiquery_max_variants: int = 4
+    multiquery_use_llm: bool = False  # deterministic variants only unless enabled
     # 0.65 is the sweep optimum, down from 0.80 on the 18-document corpus —
     # BM25's optimal share *grew* as the corpus grew. With 73 error codes across
     # 42 services, an exact token like PAY-5021 discriminates far better than an
@@ -66,6 +97,13 @@ class Settings(BaseSettings):
     # strengthened it rather than weakening it.
     dense_weight: float = 0.65  # hybrid blend; bm25 gets (1 - dense_weight)
     min_score: float = 0.15
+
+    # --- self-correction ---
+    # Attempts *after* the first. 1 is deliberate: the recoverable failure this
+    # targets is triage over-narrowing, which a single broadened retry fixes or
+    # does not. Further attempts repeat the same broad query and only spend
+    # money to reach the same escalation.
+    max_retries: int = 1
 
     # --- guardrails / escalation ---
     confidence_threshold: float = 0.55
