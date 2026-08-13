@@ -62,14 +62,14 @@ locals {
   # definition JSON, which is readable by anyone with ecs:DescribeTaskDefinition.
   common_environment = merge(
     {
-      AIOPS_INDEX_URI  = "s3://${aws_s3_bucket.artifacts.bucket}/${trim(var.index_prefix, "/")}/"
-      AIOPS_DB_HOST    = aws_db_instance.main.address
-      AIOPS_DB_PORT    = tostring(aws_db_instance.main.port)
-      AIOPS_DB_NAME    = var.db_name
-      AIOPS_DB_USER    = var.db_username
-      AIOPS_DB_SCHEME  = var.db_url_scheme
+      AIOPS_INDEX_URI    = "s3://${aws_s3_bucket.artifacts.bucket}/${trim(var.index_prefix, "/")}/"
+      AIOPS_DB_HOST      = aws_db_instance.main.address
+      AIOPS_DB_PORT      = tostring(aws_db_instance.main.port)
+      AIOPS_DB_NAME      = var.db_name
+      AIOPS_DB_USER      = var.db_username
+      AIOPS_DB_SCHEME    = var.db_url_scheme
       AIOPS_SERVICE_NAME = local.name
-      AWS_REGION       = var.region
+      AWS_REGION         = var.region
       # ONNX Runtime sizes its thread pool from the host's core count, which on
       # Fargate is the instance's rather than the task's. Left unbounded a small
       # task spawns dozens of threads and thrashes.

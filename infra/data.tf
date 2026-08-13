@@ -214,7 +214,7 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot        = !local.is_production
   final_snapshot_identifier  = local.is_production ? "${local.name}-final-${formatdate("YYYYMMDDhhmmss", timestamp())}" : null
 
-  performance_insights_enabled = local.is_production
+  performance_insights_enabled    = local.is_production
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
   tags = local.tags

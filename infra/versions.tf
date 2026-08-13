@@ -5,7 +5,7 @@ terraform {
   #     stopped being labelled experimental in 1.11. It is why there is no
   #     DynamoDB table anywhere in this repository — see infra/README.md.
   #   - `validation` blocks that reference *other* variables (1.9+), used in
-  #     modules/network to fail at plan time when the VPC is configured with no
+  #     network.tf to fail at plan time when the VPC is configured with no
   #     egress path at all, rather than at first task start.
   required_version = ">= 1.11.0"
 
@@ -21,7 +21,7 @@ terraform {
     }
     random = {
       source = "hashicorp/random"
-      # Used for exactly one thing: the RDS master password. See modules/rds.
+      # Used for exactly one thing: the RDS master password. See data.tf.
       version = "~> 3.7"
     }
   }
