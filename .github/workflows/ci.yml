@@ -18,14 +18,25 @@ concurrency:
 
 env:
   # Force the deterministic extractive path so CI never needs a credential and
-  # never spends money. Retrieval and safety are fully measurable here; answer
-  # quality is not, and is reported as n/a rather than faked.
+  # never spends money. Retrieval, safety and the end-to-end answer metrics are
+  # fully measurable here; judged faithfulness is not, and is reported as n/a
+  # rather than faked.
   AIOPS_FORCE_OFFLINE: "1"
+  # FastEmbed's default cache is /tmp/fastembed_cache, which is ephemeral and
+  # was not what the cache step used to point at — so both ONNX models were
+  # re-downloaded on every run while the cache step silently saved nothing.
+  # Pinning it into the workspace is what makes actions/cache work at all.
+  FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
 
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Measured locally on a CPU-only machine: index build ~300s, tests ~305s,
+    # the gate ~600s. That is ~20 minutes before any model download, so 30 was
+    # close enough to the edge that a slow runner failed the build on timeout
+    # rather than on quality. Raised with the cache fix rather than instead of
+    # it — a build that fails for the wrong reason teaches nobody anything.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -37,17 +48,26 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      # --frozen, and no `||` fallback. The previous form fell back to an
+      # unpinned install when `uv sync` failed and still went green, which is a
+      # lockfile that guarantees nothing.
       - name: Install dependencies
-        run: uv sync --all-extras || uv pip install -e ".[dev]"
+        run: uv sync --extra dev --frozen
 
       - name: Lint
         run: uv run ruff check src tests scripts
 
-      - name: Cache the embedding model
+      # Keyed on the models the code actually asks for, so adding or changing a
+      # model invalidates the cache. The previous key was a fixed string, which
+      # meant GitHub saved once and never updated it — a model added later was
+      # downloaded on every run forever.
+      - name: Cache ONNX models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/fastembed
-          key: fastembed-bge-small-en-v1.5
+          path: ${{ env.FASTEMBED_CACHE_PATH }}
+          key: fastembed-${{ hashFiles('src/aiops/config.py') }}
+          restore-keys: |
+            fastembed-
 
       - name: Fetch real log samples (LogHub)
         run: bash scripts/fetch_loghub.sh
@@ -69,3 +89,36 @@ jobs:
           name: evaluation-report
           path: data/eval/latest_report.json
           if-no-files-found: warn
+
+  # Separate job: it needs none of the corpus, the index or the models, so it
+  # finishes in under a minute instead of waiting twenty for the quality gate.
+  supply-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      # Non-blocking for now. A vulnerability in a transitive dependency of a
+      # portfolio project is worth knowing about, but failing the build on a
+      # third party's disclosure timetable means the build breaks on a day when
+      # nothing here changed. Revisit when something real depends on this.
+      - name: Audit dependencies
+        continue-on-error: true
+        run: |
+          uv tool run pip-audit --strict --progress-spinner off \
+            --requirement <(uv export --frozen --no-dev --no-emit-project)
+
+      # Only the diff, so an existing finding does not fail every future PR.
+      - name: Scan for leaked secrets
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

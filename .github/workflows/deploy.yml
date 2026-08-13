@@ -1,0 +1,214 @@
+name: Deploy
+
+# Build the image, push it to ECR, roll the ECS service.
+#
+# The ordering is the point: this workflow waits for CI to pass before it does
+# anything. `workflow_run` rather than a `push` trigger means a commit that
+# fails the retrieval or safety gate is never built, let alone deployed — the
+# gate is only worth having if it stands between a regression and production.
+#
+# Authentication is OIDC role assumption. There are no long-lived AWS keys in
+# this repository's secrets, because a leaked static key is valid until someone
+# notices and a leaked OIDC token is valid for an hour and only for this repo.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing image tag to deploy (leave empty to build from HEAD)"
+        required: false
+        type: string
+
+concurrency:
+  # Not cancel-in-progress: interrupting a half-finished ECS rollout leaves the
+  # service mid-deploy with two task definition revisions live.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token
+
+jobs:
+  build:
+    # Skip when CI failed. `workflow_run` fires on completion regardless of
+    # outcome, so without this a red build would still deploy.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run checks out the default branch, not the commit that
+          # triggered CI. Without this the image is built from whatever main
+          # points at now, which may not be what passed the gate.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve image tag
+        id: meta
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ECR tags are immutable, so pushing an existing tag is an error rather
+      # than a no-op. Skipping the build also makes a redeploy of an unchanged
+      # commit fast, which is what a rollback is.
+      - name: Check whether this tag already exists
+        id: exists
+        run: |
+          if aws ecr describe-images \
+              --repository-name "${{ vars.ECR_REPOSITORY }}" \
+              --image-ids imageTag="${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Buildx
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      # ARM64 to match the Fargate runtime_platform in infra/. Built under
+      # emulation on an x86 runner, which is slow — the model download and the
+      # index build dominate anyway.
+      - name: Build and push
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: true
+          provenance: false # ECR's manifest handling and provenance attestations disagree
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+          build-args: |
+            INDEX_MODE=baked
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Gate production behind a reviewer. Configure required reviewers on the
+    # environment in repository settings — the workflow cannot enforce that
+    # itself.
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      # Not to push anything — only to learn the registry hostname, so the
+      # account id does not have to be a secret repeated in an image reference.
+      - name: Resolve the ECR registry
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Record what is live now, so a failed rollout has something to name.
+      - name: Capture the current task definition
+        id: current
+        run: |
+          arn=$(aws ecs describe-services \
+            --cluster "${{ vars.ECS_CLUSTER }}" \
+            --services "${{ vars.ECS_SERVICE }}" \
+            --query 'services[0].taskDefinition' --output text)
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "Currently deployed: $arn"
+
+      - name: Render the new task definition
+        id: render
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ vars.ECS_TASK_FAMILY }}" \
+            --query 'taskDefinition' > task-definition.json
+          # Strip the read-only fields the register call rejects.
+          python - <<'PY'
+          import json
+          d = json.load(open("task-definition.json"))
+          for k in ("taskDefinitionArn", "revision", "status", "requiresAttributes",
+                    "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"):
+              d.pop(k, None)
+          json.dump(d, open("task-definition.json", "w"), indent=2)
+          PY
+
+      - name: Point it at the new image
+        id: taskdef
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: api
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ needs.build.outputs.image_tag }}
+
+      # wait-for-service-stability plus the circuit breaker configured in
+      # Terraform: ECS rolls back on its own if the new tasks never pass their
+      # health check, and this step fails rather than reporting success.
+      - name: Deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.taskdef.outputs.task-definition }}
+          service: ${{ vars.ECS_SERVICE }}
+          cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 20
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ vars.APP_URL }}/health" || true)
+            if [ "$code" = "200" ]; then
+              echo "healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::/health did not return 200 after the rollout"
+          exit 1
+
+      # Belt and braces. The circuit breaker should have handled a failed
+      # rollout already; this covers the case where tasks are healthy but the
+      # smoke test is not.
+      - name: Roll back
+        if: failure()
+        run: |
+          echo "::warning::rolling back to ${{ steps.current.outputs.arn }}"
+          aws ecs update-service \
+            --cluster "${{ vars.ECS_CLUSTER }}" \
+            --service "${{ vars.ECS_SERVICE }}" \
+            --task-definition "${{ steps.current.outputs.arn }}" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "${{ vars.ECS_CLUSTER }}" \
+            --services "${{ vars.ECS_SERVICE }}"
