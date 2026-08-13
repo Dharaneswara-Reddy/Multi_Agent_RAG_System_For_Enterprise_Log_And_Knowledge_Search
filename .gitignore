@@ -23,5 +23,30 @@ data/eval/sweep.json
 # Env
 .env
 
+# Terraform
+#
+# State first, and it matters most: a state file records every attribute of
+# every resource, including the generated RDS master password in clear text.
+# It belongs in the S3 backend, never in git.
+.terraform/
+.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# Real variable files carry account ids and CIDRs; the example is the contract.
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+# Written out-of-band per infra/README.md — names a bucket, differs per env.
+backend.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
 # Local agent/editor state
 .claude/
