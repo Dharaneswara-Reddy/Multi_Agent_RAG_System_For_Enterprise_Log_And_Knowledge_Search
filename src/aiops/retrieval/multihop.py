@@ -180,7 +180,7 @@ def expand(
             # without this they act as hubs that spray hops across all of a
             # service's unrelated faults — reaching related documents while
             # traversing nothing the question turns on.
-            own = set(hit.chunk.error_codes)
+            own = set() if settings.multihop_follow_own_codes else set(hit.chunk.error_codes)
             for ref in extract_references(hit.chunk.text):
                 if ref in own:
                     continue
@@ -196,11 +196,7 @@ def expand(
                     continue
                 if chunk.doc_id == source_doc:
                     continue  # a document citing its own code is not a hop
-                if chunk.source_type == SourceType.LOG:
-                    # Logs carry error codes as metadata, so an unfiltered hop
-                    # lands on raw log lines instead of the runbook explaining
-                    # the code. Logs are evidence and are reached deliberately
-                    # by trace expansion, which is the right mechanism for them.
+                if not settings.multihop_allow_logs and chunk.source_type == SourceType.LOG:
                     continue
                 similarity = float(index.matrix[position] @ qv)
                 scored.append((defines, similarity, position, ref, source_doc))
@@ -211,6 +207,13 @@ def expand(
         # is the whole point of the hop: follow a citation to the thing that
         # explains it, not to whichever mentioning document most resembles the
         # query — that one is what direct retrieval is already for.
+        #
+        # This costs golden-set recall (0.979 -> 0.962) and buys traversal
+        # correctness (reasoned 0.167 -> 0.417, scripts/eval_multihop.py). The
+        # recall it gives up came from hops landing on incidentally-relevant
+        # documents, which is reaching without reasoning — so the lower number
+        # describes the more correct system, the same way the corpus fix that
+        # took recall from 0.983 to 0.979 did.
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
         added: list[RetrievedChunk] = []

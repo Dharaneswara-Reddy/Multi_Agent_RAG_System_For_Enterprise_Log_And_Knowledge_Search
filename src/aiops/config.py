@@ -100,8 +100,24 @@ class Settings(BaseSettings):
     # direct hit, so they cannot change what an answer is about.
     multihop_enabled: bool = True
     multihop_max_hops: int = 1
+    # 3, not 5. Raising it recovers only +0.006 recall (0.962 -> 0.968) of the
+    # 0.017 that preferring defining documents cost, and gives up precision
+    # (0.187 -> 0.174) plus context budget to do it. The conflict between
+    # traversal quality and recall is real rather than a budget artefact, so it
+    # is recorded as a trade instead of tuned away.
     multihop_per_hop_cap: int = 3
     multihop_min_similarity: float = 0.45  # a cited but off-topic document is not evidence
+    # Log chunks carry error codes as metadata, so a hop on a code can land on
+    # raw log lines rather than the runbook explaining it. Excluding them made
+    # traversal cleaner and cost golden-set recall, because logs are legitimate
+    # evidence for log questions. Kept switchable and measured — see README.
+    multihop_allow_logs: bool = True
+    # Whether a document may hop on a code it already owns. Service docs list
+    # every code of their service, so allowing this turns them into hubs that
+    # reach a service's unrelated faults. Switchable because "reaches more
+    # documents" and "traverses the right chain" are different goals and the
+    # trade between them has to be measured, not assumed.
+    multihop_follow_own_codes: bool = False
 
     # --- multi-query rewriting ---
     # Several formulations of the question, fused by RRF across variants.

@@ -102,17 +102,45 @@ def test_service_doc_listing_a_code_is_a_mention_not_a_definition():
 # --- what must not be hopped to ------------------------------------------
 
 
-def test_logs_are_never_hop_destinations():
-    """Log chunks carry error codes as metadata, so an unfiltered hop lands on
-    raw log lines instead of the runbook that explains the code."""
+def test_logs_are_excluded_as_hop_targets_when_configured(monkeypatch):
+    """Log chunks carry error codes as metadata, so a hop on a code can land on
+    raw log lines instead of the runbook explaining it.
+
+    Excluding them is switchable rather than absolute: measured, it changed
+    neither traversal quality nor recall, and logs are legitimate evidence for
+    log questions — so the default is to allow them.
+    """
+    from aiops.config import settings
+
     source = _chunk("RB-SUPP-7740", "starves the pool, see INV-3007", codes=["SUPP-7740"])
     log = _chunk("log-meridian-platform", "INV-3007 timeout", codes=["INV-3007"],
                  source=SourceType.LOG)
     index = _FakeIndex([source, log])
 
+    monkeypatch.setattr(settings, "multihop_allow_logs", False)
     out, hops = expand("why", [_hit(source)], index)
     assert hops == 0
     assert all(h.chunk.source_type != SourceType.LOG for h in out)
+
+    monkeypatch.setattr(settings, "multihop_allow_logs", True)
+    _out, hops = expand("why", [_hit(source)], index)
+    assert hops == 1, "default configuration should permit a log as a hop target"
+
+
+def test_a_defining_runbook_outranks_a_log_carrying_the_same_code(monkeypatch):
+    """Even with logs permitted, the document that explains a code wins."""
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "multihop_allow_logs", True)
+    source = _chunk("RB-SUPP-7740", "starves the pool, see INV-3007", codes=["SUPP-7740"])
+    log = _chunk("log-meridian-platform", "INV-3007 timeout", codes=["INV-3007"],
+                 source=SourceType.LOG)
+    definer = _chunk("RB-INVENTORY-POOL", "pool exhaustion", codes=["INV-3007"])
+    index = _FakeIndex([source, log, definer])
+
+    out, _ = expand("why", [_hit(source)], index, per_hop_cap=1)
+    hop = next(h for h in out if h.provenance == "reference_hop")
+    assert hop.chunk.doc_id == "RB-INVENTORY-POOL"
 
 
 def test_self_enumeration_is_not_a_cross_reference():
