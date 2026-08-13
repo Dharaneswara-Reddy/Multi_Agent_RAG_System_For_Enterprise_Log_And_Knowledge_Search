@@ -46,7 +46,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 156 tests
+uv run pytest -q                                   # 233 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
@@ -583,10 +583,72 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 ---
 
+## Deployment
+
+The system runs entirely on AWS with nothing on a laptop: a container image on
+ECS Fargate behind an ALB, Postgres for the audit trail and escalation queue,
+S3 for index artefacts, Secrets Manager for credentials.
+
+> **Written, not deployed.** There is no AWS account behind this, and Terraform
+> and the AWS CLI are not installed on the machine it was written on — so no
+> `terraform validate`, no `plan`, and no image build has run. It is a
+> considered starting point that needs its first `plan` read carefully, not
+> something known to stand up clean. Saying otherwise would be the dishonest
+> part.
+
+| Piece | Where | Note |
+|---|---|---|
+| Image | [Dockerfile](Dockerfile) | multi-stage; **models and index baked in** |
+| Entrypoint | [docker/entrypoint.sh](docker/entrypoint.sh) | preflight, then `exec` so SIGTERM lands |
+| Local stack | [docker-compose.yml](docker-compose.yml) | API + UI + Postgres |
+| Infrastructure | [infra/](infra/) | VPC, ECR, ECS, ALB, RDS, S3, IAM, alarms |
+| Pipelines | [.github/workflows/](.github/workflows/) | quality gate, then OIDC deploy |
+| Research | [docs/aws-deployment-research.md](docs/aws-deployment-research.md) | why these services |
+
+### What had to change to make it cloud-native
+
+**SQLite could not survive multiple tasks.** A file-backed database in a task's
+writable layer is private to that task and gone on redeploy — two tasks would
+have queued escalations into two queues nobody reviews. Persistence is now a
+backend decision ([storage/](src/aiops/storage/)): SQLite by default, Postgres
+when `AIOPS_DB_URL` is set. Selection is **strict** rather than falling back,
+because a deployment that quietly degraded to SQLite would keep answering
+questions while losing the audit trail.
+
+**Index artefacts had to come from somewhere.** `AIOPS_INDEX_URI=s3://…` fetches
+them at startup. They are data, not code — baking them in permanently would tie
+a reindex to an application release.
+
+**Cold starts had to be designed away.** Two ONNX models (~250MB) plus a full
+embedding pass are startup costs, and a task paying them fails its ALB health
+check before serving anything. Both move into the image build, paid once per
+release instead of once per task.
+
+### The cost decision worth knowing
+
+At low traffic the stack is **~$105/month**, and **NAT is a third of it**. This
+workload's only outbound need is `api.anthropic.com`, so `nat_gateway_mode` is a
+first-class variable: `per_az` (prod default), `single`, or `none` — the last
+viable with `force_offline = true`, which removes ~$33/month and runs the
+deterministic extractive path. Gateway endpoints for S3 are free and keep image
+layer pulls off the NAT path entirely.
+
+### Try it locally first
+
+```bash
+docker compose up          # API :8000, console :8501, Postgres
+```
+
+That exercises the *cloud* configuration — the Postgres backend and the
+container entrypoint — on a laptop. For ordinary development `uv run uvicorn`
+against SQLite is faster and needs no build.
+
+---
+
 ## What I'd do next
 
-- **Deploy to Azure AI Foundry.** Deliberately deferred until the local system
-  was complete; the orchestrator endpoint is the natural first piece.
+- **Actually apply the Terraform.** Everything above is unexecuted. The first
+  `plan` is the real test, and I would expect to fix something.
 - **Ranking on conversational queries.** Evidence-region hit is 0.950, so the
   right region is found; MRR falls 0.851 → 0.635, so it is not found *first*.
   Deterministic query variants failed to close this. The untested hypothesis is
