@@ -1,0 +1,167 @@
+[
+  {
+    "mechanism": "hop_expected",
+    "question": "why did a key rotation make account records unreadable",
+    "start": "RB-ACC-3301",
+    "destination": "RB-SEC-9002",
+    "destination_hit": true,
+    "reasoned": true,
+    "path_precision": 0.5,
+    "path_recall": 1.0,
+    "edges_taken": [
+      "RB-ACC-3301--SEC-9002-->PM-2025-0521-02-checkout-address-key",
+      "RB-ACC-3301--SEC-9002-->RB-SEC-9002"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "a supplier import is exhausting the inventory connection pool, why can't I just raise the pool size",
+    "start": "RB-SUPP-7740",
+    "destination": "RB-INVENTORY-POOL",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "RB-INVENTORY-POOL--ADR-0012-->ADR-0012-inventory-indexes",
+      "RB-SUPP-7740--INV-3007-->log-meridian-platform"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "TOTP codes are being rejected on one node, has this happened before in another service",
+    "start": "RB-MFA-5501",
+    "destination": "RB-AUTH-CLOCKSKEW",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "GUIDE-clock-discipline--ADR-0030-->ADR-0030-pricing-effective-dating",
+      "GUIDE-clock-discipline--ETL-4401-->RB-ETL-4401",
+      "GUIDE-clock-discipline--STRM-2240-->RB-STRM-2240"
+    ]
+  },
+  {
+    "mechanism": "hop_expected",
+    "question": "the ledger partition rollover did not happen, what upstream job is responsible",
+    "start": "RB-LED-1030",
+    "destination": "RB-SCH-3310",
+    "destination_hit": true,
+    "reasoned": true,
+    "path_precision": 0.5,
+    "path_recall": 1.0,
+    "edges_taken": [
+      "RB-LED-1030--SCH-3310-->RB-SCH-3310",
+      "RB-LED-1030--SCH-3310-->SVC-scheduler-service"
+    ]
+  },
+  {
+    "mechanism": "hop_expected",
+    "question": "a kill switch did not take effect on every pod, what is the underlying mechanism",
+    "start": "RB-FLAG-4401",
+    "destination": "RB-CFG-1120",
+    "destination_hit": true,
+    "reasoned": true,
+    "path_precision": 0.5,
+    "path_recall": 1.0,
+    "edges_taken": [
+      "PM-2025-0521-02-checkout-address-key--ADR-0027-->ADR-0027-secrets-cached-at-boot",
+      "RB-FLAG-4401--CFG-1120-->RB-CFG-1120"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "checkout is blocked on a tax quote timeout, what is happening at the tax provider",
+    "start": "RB-CHK-7010",
+    "destination": "RB-TAX-8801",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": []
+  },
+  {
+    "mechanism": "hop_expected",
+    "question": "refunds were authorised without receipt, what refund failure does that cause",
+    "start": "RB-RET-8801",
+    "destination": "RB-REF-2201",
+    "destination_hit": true,
+    "reasoned": true,
+    "path_precision": 1.0,
+    "path_recall": 1.0,
+    "edges_taken": [
+      "RB-RET-8801--REF-2201-->RB-REF-2201"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "discount stacking went wrong, how does that affect loyalty points",
+    "start": "RB-PROMO-5502",
+    "destination": "RB-LOY-6603",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "PM-2025-1128-04-promo-stacking--ADR-0031-->ADR-0031-promotion-compiled-rules",
+      "RB-PROMO-5502--PRC-3301-->RB-PRC-3301"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "a product is sellable with no price, which supplier import causes that",
+    "start": "RB-CAT-4410",
+    "destination": "RB-SUPP-7702",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "PM-2026-0809-01-supplier-truncation--ADR-0042-->ADR-0042-delta-guard-supplier-feeds",
+      "RB-CAT-4410--PRC-3301-->RB-PRC-3301"
+    ]
+  },
+  {
+    "mechanism": "hop_expected",
+    "question": "the stream watermark stalled, which downstream model features go stale",
+    "start": "RB-STRM-2240",
+    "destination": "RB-FRAUD-6601",
+    "destination_hit": true,
+    "reasoned": true,
+    "path_precision": 0.3333,
+    "path_recall": 1.0,
+    "edges_taken": [
+      "RB-RNK-3301--MET-6601-->PM-2026-0203-02-metrics-cardinality",
+      "RB-RNK-3301--MET-6601-->RB-MET-6601",
+      "RB-STRM-2240--FRAUD-6601-->RB-FRAUD-6601"
+    ]
+  },
+  {
+    "mechanism": "direct",
+    "question": "one kafka partition is lagging badly, what does that do to the search index",
+    "start": "RB-BUS-1201",
+    "destination": "RB-IDX-7701",
+    "destination_hit": true,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "RB-BUS-1201--ADR-0052-->ADR-0052-topic-repartition-procedure",
+      "RB-BUS-1201--CAT-4455-->RB-CAT-4455"
+    ]
+  },
+  {
+    "mechanism": "missing",
+    "question": "the rate limiter is failing open, which abuse path does that expose",
+    "start": "RB-RATE-5501",
+    "destination": "RB-WAL-3350",
+    "destination_hit": false,
+    "reasoned": false,
+    "path_precision": 0.0,
+    "path_recall": 0.0,
+    "edges_taken": [
+      "GUIDE-fail-open-fail-closed--ADR-0021-->ADR-0021-fraud-fail-open"
+    ]
+  }
+]
