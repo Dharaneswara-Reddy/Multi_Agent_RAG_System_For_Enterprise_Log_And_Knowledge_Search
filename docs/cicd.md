@@ -85,7 +85,21 @@ Terraform outputs most of these — run `terraform output` in `infra/`.
 | `ECS_CLUSTER` | `terraform output ecs_cluster_name` | `aiops-prod` |
 | `ECS_SERVICE` | `terraform output ecs_api_service_name` | `aiops-prod-api` |
 | `ECS_TASK_FAMILY` | `terraform output api_task_family` | `aiops-prod-api` |
+| `ECS_UI_SERVICE` | `terraform output ecs_ui_service_name` | `aiops-prod-ui` |
+| `ECS_UI_TASK_FAMILY` | `terraform output ui_task_family` | `aiops-prod-ui` |
 | `APP_URL` | `terraform output api_url` | `https://…elb.amazonaws.com` |
+
+**The two `ECS_UI_*` variables are how the console gets deployed at all.**
+Terraform sets `ignore_changes = [task_definition]` on both services so that a
+`terraform apply` does not revert whatever the pipeline last rolled out. The
+consequence is that nothing except this workflow ever moves a service to a new
+image — so a pipeline that rolled only the API would leave the console running
+the image `terraform apply` first pinned, indefinitely, while the API moved on.
+The symptom is a console that keeps answering from a stale index and a build
+that reports success.
+
+Leave both unset when running with `enable_ui = false`; the console steps are
+skipped on an empty `ECS_UI_SERVICE`.
 
 ### Repository **secret**
 

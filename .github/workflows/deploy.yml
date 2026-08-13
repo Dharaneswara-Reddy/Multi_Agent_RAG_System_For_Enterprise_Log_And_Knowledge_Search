@@ -107,6 +107,7 @@ jobs:
             ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
           build-args: |
             INDEX_MODE=baked
+            AIOPS_EXTRAS=cloud
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -121,8 +122,24 @@ jobs:
       name: production
       url: ${{ vars.APP_URL }}
 
+    env:
+      CLUSTER: ${{ vars.ECS_CLUSTER }}
+      API_SERVICE: ${{ vars.ECS_SERVICE }}
+      API_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      # Both blank when the console is not deployed (Terraform's `enable_ui =
+      # false`). Every console step keys off that, so a single-service stack
+      # needs no change here.
+      UI_SERVICE: ${{ vars.ECS_UI_SERVICE }}
+      UI_FAMILY: ${{ vars.ECS_UI_TASK_FAMILY }}
+      IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+
     steps:
+      # Same ref as the build job. This job runs `.github/scripts/` now, so
+      # taking the default branch would run the tip's helper against an image
+      # built from an older commit.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -138,49 +155,77 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       # Record what is live now, so a failed rollout has something to name.
-      - name: Capture the current task definition
+      # Both services, because a rollback that restored only the API would
+      # leave the console on the revision that just failed.
+      - name: Capture the current task definitions
         id: current
         run: |
-          arn=$(aws ecs describe-services \
-            --cluster "${{ vars.ECS_CLUSTER }}" \
-            --services "${{ vars.ECS_SERVICE }}" \
-            --query 'services[0].taskDefinition' --output text)
-          echo "arn=$arn" >> "$GITHUB_OUTPUT"
-          echo "Currently deployed: $arn"
+          live() {
+            aws ecs describe-services --cluster "$CLUSTER" --services "$1" \
+              --query 'services[0].taskDefinition' --output text
+          }
+          api=$(live "$API_SERVICE")
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "API currently: $api"
+          if [ -n "$UI_SERVICE" ]; then
+            ui=$(live "$UI_SERVICE")
+            echo "ui=$ui" >> "$GITHUB_OUTPUT"
+            echo "console currently: $ui"
+          fi
 
-      - name: Render the new task definition
-        id: render
+      - name: Render the task definitions
         run: |
-          aws ecs describe-task-definition \
-            --task-definition "${{ vars.ECS_TASK_FAMILY }}" \
-            --query 'taskDefinition' > task-definition.json
-          # Strip the read-only fields the register call rejects.
-          python - <<'PY'
-          import json
-          d = json.load(open("task-definition.json"))
-          for k in ("taskDefinitionArn", "revision", "status", "requiresAttributes",
-                    "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"):
-              d.pop(k, None)
-          json.dump(d, open("task-definition.json", "w"), indent=2)
-          PY
+          fetch() {
+            aws ecs describe-task-definition --task-definition "$1" \
+              --query 'taskDefinition' > "$2"
+            python3 .github/scripts/strip_task_definition.py "$2"
+          }
+          fetch "$API_FAMILY" task-definition-api.json
+          if [ -n "$UI_FAMILY" ]; then
+            fetch "$UI_FAMILY" task-definition-ui.json
+          fi
 
-      - name: Point it at the new image
-        id: taskdef
+      - name: Point the API at the new image
+        id: taskdef-api
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: task-definition.json
+          task-definition: task-definition-api.json
           container-name: api
-          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ needs.build.outputs.image_tag }}
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
       # wait-for-service-stability plus the circuit breaker configured in
       # Terraform: ECS rolls back on its own if the new tasks never pass their
       # health check, and this step fails rather than reporting success.
-      - name: Deploy
+      - name: Deploy the API
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.taskdef.outputs.task-definition }}
-          service: ${{ vars.ECS_SERVICE }}
-          cluster: ${{ vars.ECS_CLUSTER }}
+          task-definition: ${{ steps.taskdef-api.outputs.task-definition }}
+          service: ${{ env.API_SERVICE }}
+          cluster: ${{ env.CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 20
+
+      # The console is the same image with a different entrypoint command, and
+      # it needs the same rollout. Terraform sets `ignore_changes` on
+      # task_definition for both services, so nothing else ever moves it —
+      # without these two steps the console serves whatever image
+      # `terraform apply` first pinned, indefinitely.
+      - name: Point the console at the new image
+        id: taskdef-ui
+        if: env.UI_SERVICE != ''
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-ui.json
+          container-name: ui
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+      - name: Deploy the console
+        if: env.UI_SERVICE != ''
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.taskdef-ui.outputs.task-definition }}
+          service: ${{ env.UI_SERVICE }}
+          cluster: ${{ env.CLUSTER }}
           wait-for-service-stability: true
           wait-for-minutes: 20
 
@@ -200,15 +245,19 @@ jobs:
       # Belt and braces. The circuit breaker should have handled a failed
       # rollout already; this covers the case where tasks are healthy but the
       # smoke test is not.
+      #
+      # `restore` no-ops on an empty service or revision, which covers both a
+      # stack without the console and a failure early enough that nothing was
+      # captured.
       - name: Roll back
         if: failure()
         run: |
-          echo "::warning::rolling back to ${{ steps.current.outputs.arn }}"
-          aws ecs update-service \
-            --cluster "${{ vars.ECS_CLUSTER }}" \
-            --service "${{ vars.ECS_SERVICE }}" \
-            --task-definition "${{ steps.current.outputs.arn }}" \
-            --force-new-deployment
-          aws ecs wait services-stable \
-            --cluster "${{ vars.ECS_CLUSTER }}" \
-            --services "${{ vars.ECS_SERVICE }}"
+          restore() {
+            [ -n "$1" ] && [ -n "$2" ] || return 0
+            echo "::warning::rolling $1 back to $2"
+            aws ecs update-service --cluster "$CLUSTER" --service "$1" \
+              --task-definition "$2" --force-new-deployment >/dev/null
+            aws ecs wait services-stable --cluster "$CLUSTER" --services "$1"
+          }
+          restore "$API_SERVICE" "${{ steps.current.outputs.api }}"
+          restore "$UI_SERVICE" "${{ steps.current.outputs.ui }}"

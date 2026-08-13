@@ -31,12 +31,18 @@ output "ecs_api_service_name" {
 }
 
 output "ecs_ui_service_name" {
-  value = var.enable_ui ? aws_ecs_service.ui[0].name : null
+  description = "Set as the ECS_UI_SERVICE GitHub variable. Null when the console is disabled — leave the variable unset and the deploy skips it."
+  value       = var.enable_ui ? aws_ecs_service.ui[0].name : null
 }
 
 output "api_task_family" {
-  description = "Task definition family the deploy registers new revisions against."
+  description = "Task definition family the deploy registers new revisions against. Set as ECS_TASK_FAMILY."
   value       = aws_ecs_task_definition.api.family
+}
+
+output "ui_task_family" {
+  description = "Set as the ECS_UI_TASK_FAMILY GitHub variable. Null when the console is disabled."
+  value       = var.enable_ui ? aws_ecs_task_definition.ui[0].family : null
 }
 
 output "artifacts_bucket" {
