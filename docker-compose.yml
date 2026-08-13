@@ -1,0 +1,125 @@
+# Local end-to-end stack: Postgres + API + UI.
+#
+# This exists to exercise the *cloud* configuration on a laptop — the Postgres
+# backend and the container entrypoint — not to be a nicer way to run the app
+# locally. For ordinary development `uv run uvicorn ...` against SQLite is
+# faster and needs no build.
+#
+# What it deliberately does not model: S3-supplied index artefacts. The image
+# ships a baked index (INDEX_MODE=baked), which is what a Fargate task should
+# also do. Point AIOPS_INDEX_URI at MinIO if you need to test that path.
+#
+#   docker compose build          # ~10 min: installs deps, downloads 2 ONNX
+#                                 # models, runs a full embedding pass
+#   docker compose up
+#   API  http://localhost:8000/docs
+#   UI   http://localhost:8501
+
+name: aiops-copilot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aiops
+      # Local-only credential. Real deployments read this from Secrets Manager;
+      # nothing here is a secret worth protecting.
+      POSTGRES_PASSWORD: aiops_local_dev
+      POSTGRES_DB: aiops
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` returns success while the server is still doing crash
+      # recovery, so the API's own entrypoint retries the connection too.
+      test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      target: runtime
+      args:
+        INDEX_MODE: baked
+    image: aiops-copilot:local
+    command: ["api"]
+    environment:
+      # Discrete parts, not a joined URL: the entrypoint assembles it. That is
+      # the shape Secrets Manager delivers an RDS credential in, and it keeps a
+      # DSN literal out of a file the secret scanner reads.
+      AIOPS_DB_HOST: postgres
+      AIOPS_DB_USER: aiops
+      AIOPS_DB_PASSWORD: aiops_local_dev
+      AIOPS_DB_NAME: aiops
+      # No API key: answers are extractive and deterministic. Set
+      # ANTHROPIC_API_KEY in a .env file to enable synthesis.
+      AIOPS_FORCE_OFFLINE: "1"
+      AIOPS_API_PORT: "8000"
+      # Match the CPU allocation below, or ONNX Runtime sizes its thread pool
+      # from the host's core count and thrashes.
+      OMP_NUM_THREADS: "2"
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Generous: a cold start loads the index and two ONNX sessions.
+      start_period: 90s
+
+  ui:
+    image: aiops-copilot:local
+    command: ["ui"]
+    environment:
+      # Discrete parts, not a joined URL: the entrypoint assembles it. That is
+      # the shape Secrets Manager delivers an RDS credential in, and it keeps a
+      # DSN literal out of a file the secret scanner reads.
+      AIOPS_DB_HOST: postgres
+      AIOPS_DB_USER: aiops
+      AIOPS_DB_PASSWORD: aiops_local_dev
+      AIOPS_DB_NAME: aiops
+      AIOPS_FORCE_OFFLINE: "1"
+      AIOPS_UI_PORT: "8501"
+      OMP_NUM_THREADS: "1"
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Not required — the console imports the graph in process rather than
+      # calling the API — but starting it after the API keeps the logs readable.
+      api:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  pgdata:

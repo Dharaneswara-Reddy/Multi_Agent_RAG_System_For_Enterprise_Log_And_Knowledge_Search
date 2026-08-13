@@ -1,0 +1,56 @@
+# Build context exclusions.
+#
+# The context is sent to the daemon before the first instruction runs, so
+# anything large and irrelevant here is latency on every build. Two entries
+# matter more than the rest: `.venv` is hundreds of megabytes of the wrong
+# platform's wheels, and `data/index` is a rebuilt artefact whose presence in
+# the context would silently shadow the one the build produces.
+
+# --- environments and caches ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# --- version control and tooling ---
+.git/
+.gitignore
+.github/
+.claude/
+*.swp
+.DS_Store
+
+# --- generated data ---
+# The image builds these itself in the assets stage (or fetches them from S3 at
+# runtime). Shipping a locally built index into the context risks baking a
+# stale one that was never produced by this build.
+data/index/
+data/index-cache/
+data/aiops.db
+data/eval/latest_report.json
+
+# LogHub samples are fetched by scripts/fetch_loghub.sh during the build. They
+# are ~2.7MB of third-party logs and do not belong in the context.
+data/logs/external/
+
+# --- local configuration and secrets ---
+# .env would otherwise be copied into a layer and shipped to a registry.
+.env
+.env.*
+!env.example
+
+# --- infrastructure and docs, not needed to run ---
+infra/
+docs/
+*.md
+!README.md
+
+# --- editor/IDE ---
+.vscode/
+.idea/
