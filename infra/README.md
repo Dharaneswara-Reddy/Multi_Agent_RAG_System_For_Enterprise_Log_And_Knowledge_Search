@@ -4,13 +4,16 @@ Terraform for deploying the AI Ops Copilot to AWS: ECS Fargate behind an ALB,
 RDS PostgreSQL for the audit trail and escalation queue, S3 for index
 artefacts, Secrets Manager for credentials.
 
-> **This code has never been applied.** Terraform and the AWS CLI are not
-> installed on the machine it was written on and there is no AWS account behind
-> it, so `terraform validate` has not been run and no `plan` has been produced.
-> Treat it as a considered starting point that will need a first `plan` read
-> carefully, not as something known to stand up cleanly. Expect to fix at least
-> one thing on the first apply — that is the normal experience with unvalidated
-> Terraform, and pretending otherwise would be the dishonest part.
+> **Validated, never applied.** `terraform validate` and `terraform fmt` pass
+> on this module and on `bootstrap/`, against Terraform 1.14.3 and aws provider
+> 6.59.0, and `.terraform.lock.hcl` is committed for both.
+>
+> No `plan` has ever run, because a plan requires credentials. Validate checks
+> syntax, types and references — it does not talk to AWS, so it cannot catch a
+> wrong ARN, an IAM policy that denies what it should permit, an unavailable
+> instance class in a region, or a service quota. Expect to fix at least one
+> thing on the first plan. That is the normal experience, and pretending
+> otherwise would be the dishonest part.
 
 ## Architecture
 
@@ -30,7 +33,18 @@ it needs the same models and index anyway.
 
 ## First deploy
 
+**Set a budget alert before step 1, not after.** Nothing in this stack stops
+spending on its own, and neither do promotional credits — when they are
+exhausted AWS bills the payment method on file. Billing → Budgets → zero-spend
+budget. Do it as root: IAM access to billing data is off by default, so a
+deploy user cannot create one.
+
 ```bash
+# 0. Credentials. An IAM user, never root — root cannot be scoped away from
+#    billing, which is the one thing worth protecting here.
+export AWS_PROFILE=aiops-deploy
+aws sts get-caller-identity          # confirm *which* principal before creating anything
+
 # 1. State backend (once per account — uses local state by design)
 cd infra/bootstrap
 terraform init && terraform apply
@@ -38,11 +52,16 @@ terraform output -raw backend_config > ../backend.hcl
 
 # 2. Main stack
 cd ..
-cp terraform.tfvars.example terraform.tfvars   # edit: image_tag, region
+cp freetier.tfvars.example terraform.tfvars    # or terraform.tfvars.example
+                                               # edit: image_tag, region
 terraform init -backend-config=backend.hcl
 terraform plan      # read this properly the first time
 terraform apply
 ```
+
+`freetier.tfvars.example` is the ~$49/month configuration;
+`terraform.tfvars.example` is the ~$101/month one. Neither is free — Fargate
+and NAT Gateway have no free-tier allowance at any size.
 
 `image_tag` has no default and the ECR repository starts empty, so the first
 apply creates a service with nothing to pull. Two options:
