@@ -1,0 +1,105 @@
+# Cheapest configuration this stack can run in.
+#
+# Read this first: **it is not free, and it cannot be made free.** Two of the
+# things this architecture is built on are not in the AWS Free Tier at any
+# size:
+#
+#   - Fargate      no free-tier allowance whatsoever
+#   - NAT Gateway  ~$32.85/month for the gateway alone, plus $0.045/GB
+#
+# What the free tier *does* cover, for 12 months, is the ALB (750 h/month) and
+# the RDS instance (750 h of db.t4g.micro, single-AZ, 20 GB). Those are the two
+# line items that would otherwise dominate, which is why the floor below is
+# ~$49 rather than ~$80.
+#
+#   defaults in variables.tf   ~$101/month
+#   this file                  ~$49/month
+#
+# On $100 of credits that is roughly one month versus two. When credits run
+# out AWS bills the payment method on file — there is no automatic stop — so
+# set a zero-spend budget alert before applying anything here.
+#
+# Figures are us-east-1, Graviton (ARM64), 730 h/month, retrieved from public
+# AWS pricing pages rather than measured. Treat them as ±15%.
+
+# --- what makes it cheap ---------------------------------------------------
+
+# One task, not two. Removes ~$14/month and all redundancy: a deploy is a brief
+# outage rather than a rolling one. Fine for a demo, wrong for production.
+api_desired_count = 1
+api_min_capacity  = 1
+api_max_capacity  = 2
+
+# 0.5 vCPU / 1 GB, the smallest Fargate combination that holds the two ONNX
+# models plus the index. ~$14.42/month.
+#
+# This is a real trade, not free money: reranking is CPU-bound and takes
+# roughly 0.1 s per candidate pair, so a 30-candidate rerank that takes ~3 s on
+# 1 vCPU takes ~6 s here. Set OMP_NUM_THREADS to 1 to match (see docs/docker.md).
+api_cpu    = 512
+api_memory = 1024
+
+# The Streamlit console is the single easiest ~$9/month to drop. The API still
+# serves everything; you lose the browser UI, not the system. Leave the
+# ECS_UI_SERVICE and ECS_UI_TASK_FAMILY GitHub variables unset to match, or the
+# deploy will look for a service that does not exist.
+enable_ui = false
+
+# --- what you cannot make cheaper ------------------------------------------
+
+# Counter-intuitive, so spelled out: "none" is *more* expensive here, not less.
+# With no NAT the tasks cannot reach ECR at all, so locals.tf switches on four
+# interface endpoints — and those are billed per endpoint per AZ:
+#
+#   single NAT              1 x $0.045/h            = $32.85/month
+#   none + 4 endpoints      4 x 2 AZ x $0.01/h      = $58.40/month
+#
+# Use "none" for privacy or for an air-gapped VPC, never for cost.
+nat_gateway_mode = "single"
+
+# Two AZs is a floor, not a choice: an ALB requires subnets in at least two
+# availability zones and will not create otherwise.
+az_count = 2
+
+# --- free-tier-eligible as configured --------------------------------------
+
+# 750 h/month of db.t4g.micro and 20 GB of storage are covered for 12 months.
+# Single-AZ is what makes it eligible; db_multi_az already defaults to false
+# for a non-production environment, but it is set here so nothing depends on
+# that inference.
+db_instance_class    = "db.t4g.micro"
+db_allocated_storage = 20
+db_multi_az          = false
+
+# Keeps s3_force_destroy and secret_recovery_window_days on their teardown-
+# friendly settings, so `terraform destroy` actually completes. Flip to
+# "production" and a deleted secret lingers for 30 days and the bucket refuses
+# to delete while objects remain.
+environment = "dev"
+
+# Must match the platform deploy.yml builds. Graviton is ~20% cheaper per
+# vCPU-hour and is the default; changing one without the other crash-loops the
+# service on "exec format error".
+cpu_architecture = "ARM64"
+
+# --- what still costs money, unavoidably -----------------------------------
+#
+#   Fargate, 1 task, 0.5 vCPU / 1 GB, ARM64      $14.42
+#   NAT Gateway (single)                         $32.85
+#   Secrets Manager, 2 secrets                    $0.80
+#   ECR storage over the 500 MB free tier         $0.07
+#   CloudWatch Logs ingestion                    ~$0.50
+#   ALB                                           $0.00   free tier, 12 months
+#   RDS db.t4g.micro + 20 GB                      $0.00   free tier, 12 months
+#   ----------------------------------------------------
+#                                                ~$48.64/month
+#
+# Cheaper alternatives, if the goal is a live demo URL rather than this
+# architecture specifically:
+#
+#   - One t3.micro EC2 instance (750 h/month free for 12 months) running
+#     docker-compose.yml: no Fargate, no NAT, no ALB. Genuinely ~$0/month,
+#     and the same image. Loses autoscaling, rolling deploys and managed
+#     Postgres — but it is a real deployment on a real URL.
+#   - Keep this stack and run it only while demonstrating. `terraform destroy`
+#     between sessions turns a monthly figure into an hourly one: ~$0.07/hour.
