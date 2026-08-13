@@ -75,7 +75,7 @@ variable "nat_gateway_mode" {
   description = <<-EOT
     How private subnets reach the internet. This is the single largest cost
     decision in the stack, so it is a first-class variable rather than a
-    hard-coded choice. See modules/network/main.tf for the full arithmetic.
+    hard-coded choice. See network.tf for the full arithmetic.
 
       "none"    - no NAT at all. Only viable together with VPC endpoints, and
                   it disables answer synthesis: api.anthropic.com is not an AWS
@@ -199,13 +199,17 @@ variable "image_tag" {
 
 variable "cpu_architecture" {
   description = <<-EOT
-    Must match what CI builds. ARM64 (Graviton) Fargate is roughly 20% cheaper
-    per vCPU-hour and onnxruntime ships aarch64 wheels, so it is a real option
-    for this workload — but the image has to be built for it, and the Dockerfile
-    is owned elsewhere. Default X86_64 until that is confirmed.
+    Must match what CI builds, and .github/workflows/deploy.yml builds
+    linux/arm64. A mismatch is not a slow path or a warning: the task starts,
+    the kernel refuses the binary, and the service crash-loops on "exec format
+    error" until the deployment circuit breaker rolls it back.
+
+    ARM64 (Graviton) is also roughly 20% cheaper per vCPU-hour, and onnxruntime
+    ships aarch64 wheels, so this is the right default on both counts. Change
+    it only together with the `platforms:` line in deploy.yml.
   EOT
   type        = string
-  default     = "X86_64"
+  default     = "ARM64"
 
   validation {
     condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
