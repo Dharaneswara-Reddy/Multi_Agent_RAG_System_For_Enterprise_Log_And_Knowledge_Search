@@ -1,0 +1,72 @@
+# Copy to terraform.tfvars and edit. Only `image_tag` has no default.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+# --- identity -------------------------------------------------------------
+
+project     = "aiops"
+environment = "dev" # "prod" flips several defaults: multi-AZ, deletion protection, per-AZ NAT
+region      = "us-east-1"
+
+# --- what to run ----------------------------------------------------------
+
+# No default on purpose. Deploying `latest` means a rollback cannot name the
+# thing it is rolling back to. CI passes the git SHA.
+image_tag = "sha-REPLACE_ME"
+
+# Fargate charges the same per vCPU-hour on ARM as x86 in most regions and the
+# ONNX runtime is well supported there. Set X86_64 if you build x86 images.
+cpu_architecture = "ARM64"
+
+# --- cost levers ----------------------------------------------------------
+# These four decide most of the bill. See infra/README.md for the arithmetic.
+
+# null  -> derived from `environment` (dev: single, prod: per_az)
+# "none" only works with force_offline, since synthesis cannot leave the VPC.
+nat_gateway_mode = "single"
+
+# ~$7.20/month each per AZ. Worth it when nat_gateway_mode = "none"; otherwise
+# they buy privacy rather than savings.
+enable_interface_endpoints = false
+
+api_desired_count = 1 # 2+ for real availability
+api_min_capacity  = 1
+api_max_capacity  = 4
+
+db_instance_class = "db.t4g.micro"
+
+# The console is one internal user; a Spot interruption costs a page refresh.
+ui_use_fargate_spot = true
+
+# --- exposure -------------------------------------------------------------
+
+# Without a certificate the ALB serves plain HTTP, which is fine for a first
+# deploy and not fine for anything else.
+acm_certificate_arn = ""
+
+# The console exposes the audit trail and the escalation queue. Leaving it open
+# to the internet should be a decision, not a default.
+# ui_allowed_cidrs = ["203.0.113.0/24"]
+
+# --- application ----------------------------------------------------------
+
+# true = deterministic extractive answers, no Anthropic call, no API key
+# needed. Useful for a first deploy that proves the infrastructure before
+# spending anything on inference.
+force_offline = false
+
+# Leave empty to disable tracing. See docs/aws-deployment-research.md §6.
+otlp_endpoint = ""
+
+# extra_environment = {
+#   AIOPS_TOP_K = "8"
+# }
+
+# --- operations -----------------------------------------------------------
+
+log_retention_days = 30
+alarm_email        = "" # set to receive alarm notifications
+
+# Opens an interactive shell into a running task. That task holds a database
+# credential, so this is off unless you need it.
+enable_execute_command = false
