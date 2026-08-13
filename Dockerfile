@@ -41,10 +41,14 @@ ARG EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 ARG RERANKER_MODEL=Xenova/ms-marco-MiniLM-L-12-v2
 
 # Optional dependency extras to install: `postgres` pulls psycopg 3, `s3` pulls
-# boto3. Empty by default because those extras are not declared in pyproject.toml
-# yet — see docs/docker.md. A deployment using AIOPS_DB_URL or AIOPS_INDEX_URI
-# must build with --build-arg AIOPS_EXTRAS=postgres,s3.
-ARG AIOPS_EXTRAS=
+# boto3, `cloud` pulls both.
+#
+# `cloud` by default, because every consumer of this image is a cloud one — ECS
+# reads its credentials from Secrets Manager and its index from S3, and compose
+# runs against Postgres. An image built without these starts happily and then
+# fails on the first database call, which is the worst place to discover a
+# missing driver. Build with --build-arg AIOPS_EXTRAS= for a SQLite-only image.
+ARG AIOPS_EXTRAS=cloud
 
 # Bytecode-compiling site-packages costs roughly 80 MB of image and saves the
 # compile pass on every process start. Worth it for a long-lived service whose

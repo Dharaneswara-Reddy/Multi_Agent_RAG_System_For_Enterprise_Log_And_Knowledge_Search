@@ -17,7 +17,15 @@ keep in step.
 docker build -t aiops-copilot:local .           # baked index (default)
 docker build -t aiops-copilot:s3 \
   --build-arg INDEX_MODE=none .                 # index supplied at runtime
+docker build -t aiops-copilot:sqlite \
+  --build-arg AIOPS_EXTRAS= .                   # no psycopg, no boto3
 ```
+
+`AIOPS_EXTRAS` defaults to `cloud` (psycopg 3 + boto3). Every consumer of this
+image is a cloud one — ECS reads credentials from Secrets Manager and its index
+from S3, compose runs against Postgres — and an image built without those
+drivers starts cleanly and then fails on the first database call. Blank it out
+only for a SQLite-only image.
 
 Roughly 10 minutes and ~1.2GB, most of it the ONNX runtime, torch-free
 FastEmbed wheels and the two models.
