@@ -26,6 +26,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8"]
+# Cloud backends are extras so the base install stays a local, credential-free
+# system. Neither is imported unless the matching setting is set, so CI installs
+# neither and behaves exactly as it did.
+postgres = ["psycopg[binary]>=3.2"]   # AIOPS_DB_URL=postgresql://...
+s3 = ["boto3>=1.35"]                  # AIOPS_INDEX_URI=s3://bucket/prefix/
+cloud = ["psycopg[binary]>=3.2", "boto3>=1.35"]
 
 [build-system]
 requires = ["hatchling"]

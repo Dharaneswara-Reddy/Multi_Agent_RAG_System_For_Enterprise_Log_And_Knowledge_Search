@@ -243,6 +243,14 @@ class HybridIndex:
     # -- persistence -------------------------------------------------------
 
     def save(self, path: Path | None = None) -> Path:
+        """Write the three artefacts to a local directory.
+
+        Local only, deliberately: building the index is an offline job, and
+        uploading its output belongs to whatever runs that job (a CI step, an
+        `aws s3 sync`), not to the class. Giving `save()` a write path to S3
+        would mean any process that rebuilt an index in memory could overwrite
+        the artefacts every running task loads from.
+        """
         path = Path(path or settings.index_dir)
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "vectors.npy", self.matrix)
@@ -255,7 +263,7 @@ class HybridIndex:
     def load(self, path: Path | None = None) -> bool:
         from rank_bm25 import BM25Okapi
 
-        path = Path(path or settings.index_dir)
+        path = _resolve_artifact_dir(path)
         vec, chk = path / "vectors.npy", path / "chunks.pkl"
         if not (vec.exists() and chk.exists()):
             return False
@@ -267,6 +275,37 @@ class HybridIndex:
         if stats_file.exists():
             self._stats = IndexStats(**json.loads(stats_file.read_text()))
         return True
+
+
+def _resolve_artifact_dir(path: Path | None) -> Path:
+    """Where `load()` should read the three artefacts from.
+
+    An explicit `path` always wins and is always local — callers that pass one
+    (the sweep, the ablation harness, the tests) are pointing at a directory
+    they just built, and reaching for S3 there would be wrong and slow.
+
+    Otherwise `AIOPS_INDEX_URI`, if it names an S3 prefix, is downloaded once
+    into `index_cache_dir` and read from there. Everything after this function
+    is the same local-filesystem load in both cases, which is the point: the
+    remote path adds a fetch, not a second code path through the loader.
+    """
+    if path is not None:
+        return Path(path)
+
+    from aiops.storage import fetch_index_artifacts, is_s3_uri
+
+    uri = settings.index_uri
+    if is_s3_uri(uri):
+        assert uri is not None  # narrowed by is_s3_uri
+        return fetch_index_artifacts(
+            uri, settings.index_cache_dir, endpoint_url=settings.s3_endpoint_url
+        )
+    if uri:
+        # A non-S3 value is treated as a local directory rather than rejected:
+        # it is the natural way to point a container at a mounted volume, and
+        # the only other sensible reading of the setting.
+        return Path(uri)
+    return Path(settings.index_dir)
 
 
 def _minmax(scores: np.ndarray) -> np.ndarray:

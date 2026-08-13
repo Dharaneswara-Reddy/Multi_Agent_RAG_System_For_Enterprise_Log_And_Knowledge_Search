@@ -20,6 +20,42 @@ class Settings(BaseSettings):
     index_dir: Path = ROOT / "data" / "index"
     db_path: Path = ROOT / "data" / "aiops.db"
 
+    # --- persistence backend ---
+    # Unset means SQLite at `db_path`, which is what every local run, the test
+    # suite, and CI use. Set to a `postgresql://user:pass@host:5432/db` URL to
+    # move the error catalog, the audit trail, and the escalation queue to a
+    # shared database — which is what makes more than one ECS task possible,
+    # since a SQLite file in a task's writable layer is private to that task and
+    # gone on redeploy.
+    #
+    # Selection is strict: a postgresql:// URL means Postgres or a failure to
+    # start. There is no fallback to SQLite, because a deployment that quietly
+    # degraded would keep answering questions while queueing escalations into a
+    # per-task queue nobody reviews.
+    #
+    # Requires the optional driver: pip install ".[postgres]"
+    db_url: str | None = None
+
+    # --- index artefacts ---
+    # Unset means read `vectors.npy` / `chunks.pkl` / `stats.json` from
+    # `index_dir`, exactly as before. Set to `s3://bucket/prefix/` to have
+    # `HybridIndex.load()` download them once at startup instead.
+    #
+    # Object storage rather than a baked-in image layer: the artefacts are data,
+    # not code, and baking them in ties a rebuild of the index to a release of
+    # the application. Prefer a *versioned* prefix (`s3://bucket/index/2026-08-13/`)
+    # — the local cache is never invalidated, so a task started before a reindex
+    # serves the old artefacts until it is replaced.
+    #
+    # Requires the optional driver: pip install ".[s3]"
+    index_uri: str | None = None
+    # Where downloaded artefacts land. Deliberately not `index_dir`, so a remote
+    # fetch can never overwrite or be confused with a locally built index.
+    index_cache_dir: Path = ROOT / "data" / "index-cache"
+    # For MinIO / localstack. None means real AWS, and credentials come from
+    # boto3's default chain — the task role on Fargate, never settings.
+    s3_endpoint_url: str | None = None
+
     # --- models ---
     # Synthesis / reasoning model. Routing and extraction use the cheap model.
     reasoning_model: str = "claude-opus-5"
