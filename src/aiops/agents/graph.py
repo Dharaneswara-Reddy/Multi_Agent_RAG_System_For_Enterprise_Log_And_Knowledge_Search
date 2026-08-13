@@ -90,6 +90,7 @@ class CopilotState(TypedDict, total=False):
     retry_reason: str
     # per-claim verification findings, surfaced beside the answer
     unsupported_claims: list[str]
+    claim_support: float
     # accumulated
     steps: Annotated[list[AgentStep], _merge_steps]
     guardrail_notes: Annotated[list[str], _merge_notes]
@@ -464,6 +465,7 @@ class Copilot:
             "citations": shown,
             "guardrail_notes": notes,
             "unsupported_claims": out.unsupported_claims,
+            "claim_support": out.claim_support,
             "steps": [
                 AgentStep(
                     agent="guardrails",
@@ -579,6 +581,10 @@ class Copilot:
                     "retry_reason": final.get("retry_reason", ""),
                     "retrieval_pipeline": _pipeline_summary(final.get("context")),
                     "unsupported_claims": final.get("unsupported_claims", []),
+                    # Computed by the gate against the full context. Exposed so
+                    # the harness reads the authoritative value instead of
+                    # recomputing against truncated citation snippets.
+                    "claim_support": final.get("claim_support", 1.0),
                 },
             )
 

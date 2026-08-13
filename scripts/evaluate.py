@@ -62,7 +62,26 @@ def print_report(report: dict) -> None:
         for f in b["failures"][:10]:
             print(f"    {f['case_id']:<10} expected={f['expected']:<10} got={f['actual']:<10} {f.get('detail','')[:44]}")
 
-    print("\nANSWER QUALITY")
+    a = report.get("answers") or {}
+    if a.get("available"):
+        print("\nANSWER (end-to-end, deterministic)")
+        print(f"  cases                 {a['n']}")
+        print(f"  answer rate           {_fmt(a['answer_rate'])}")
+        print(f"  abstention accuracy   {_fmt(a['abstention_accuracy'])}")
+        print(
+            f"  keyword coverage      {_fmt(a['keyword_coverage'])}  "
+            f"(measured on: {a.get('keyword_coverage_measured_on', 'unknown')})"
+        )
+        print(f"  claim support         {_fmt(a['claim_support'])}")
+        print(f"  citation validity     {_fmt(a['citation_validity'])}")
+        print(f"  fabrication rate      {_fmt(a['fabrication_rate'])}")
+        if a.get("failures"):
+            print(f"\n  {len(a['failures'])} case(s) with a wrong abstention or an unsupported claim:")
+            for f in a["failures"][:6]:
+                note = ", ".join(f["unsupported_claims"][:2]) or "wrong answer/abstain decision"
+                print(f"    {f['case_id']:<10} {f['verdict']:<10} {note[:44]}")
+
+    print("\nJUDGED QUALITY")
     if not q.get("available"):
         print(f"  not measured — {q.get('reason', 'unavailable')}")
     else:
