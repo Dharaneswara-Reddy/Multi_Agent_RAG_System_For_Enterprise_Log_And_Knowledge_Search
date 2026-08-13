@@ -52,6 +52,13 @@ class RetrievedChunk(BaseModel):
     # show which evidence was reached indirectly.
     provenance: str = "retrieval"
     hop: int = 0
+    # The traversal edge, when this chunk arrived via a hop. Without these,
+    # multi-hop can only be evaluated on whether it *reached* the right
+    # document — not on whether it reasoned along the right chain. A document
+    # reached by following an irrelevant citation is not the same result as one
+    # reached by following the citation the question actually turns on.
+    hop_from: str | None = None  # doc_id of the chunk that cited this one
+    hop_via: str | None = None  # the identifier followed (e.g. "SEC-9002")
 
 
 class LogRecord(BaseModel):

@@ -29,7 +29,7 @@ import re
 
 from aiops.config import settings
 from aiops.retrieval.index import HybridIndex
-from aiops.schemas import RetrievedChunk
+from aiops.schemas import RetrievedChunk, SourceType
 
 # Identifiers as they appear in document text.
 ERROR_CODE_RE = re.compile(r"\b([A-Z]{2,6}-\d{4})\b")
@@ -61,10 +61,17 @@ class ReferenceGraph:
 
     Built from chunk metadata and document ids rather than by re-parsing the
     corpus, so it stays correct when the corpus changes and costs one pass.
+
+    Crucially it records **which document defines an identifier**, not merely
+    which documents mention it. A citation to `SEC-9002` means "see the thing
+    that explains SEC-9002", not "see anything containing that string". Without
+    that distinction a hop lands on whichever mentioning document happens to
+    look most like the query — which is systematically the document direct
+    retrieval already found, making the hop worthless.
     """
 
     def __init__(self, index: HybridIndex) -> None:
-        self._by_ref: dict[str, list[int]] = {}
+        self._by_ref: dict[str, list[tuple[int, bool]]] = {}
         for position, chunk in enumerate(index.chunks):
             keys: set[str] = set(chunk.error_codes)
             doc = chunk.doc_id
@@ -81,10 +88,34 @@ class ReferenceGraph:
             if doc.startswith("RB-"):
                 keys.update(ERROR_CODE_RE.findall(doc))
             for key in keys:
-                self._by_ref.setdefault(key, []).append(position)
+                self._by_ref.setdefault(key, []).append((position, self._defines(chunk, key)))
+
+    @staticmethod
+    def _defines(chunk, ref: str) -> bool:
+        """Is this chunk's document the canonical explanation of `ref`?
+
+        A runbook carrying the code in its frontmatter owns it — that covers
+        both the generated `RB-<CODE>` documents and hand-written ones such as
+        `RB-INVENTORY-POOL`, which owns `INV-3007` without naming it in the id.
+        An ADR or post-mortem owns its own identifier. Everything else — service
+        docs, guides, other runbooks that merely cross-reference, and log chunks
+        that carry the code as metadata — is a mention.
+        """
+        from aiops.schemas import SourceType
+
+        doc = chunk.doc_id
+        if ref.startswith("ADR-"):
+            return doc.startswith(ref)
+        if ref.startswith("INC-"):
+            return doc.startswith(f"PM-{ref.removeprefix('INC-')}")
+        return chunk.source_type == SourceType.RUNBOOK and ref in chunk.error_codes
 
     def resolve(self, ref: str) -> list[int]:
-        return self._by_ref.get(ref, [])
+        return [position for position, _defines in self._by_ref.get(ref, [])]
+
+    def resolve_ranked(self, ref: str) -> list[tuple[int, bool]]:
+        """Positions with a flag for whether each defines `ref`."""
+        return list(self._by_ref.get(ref, []))
 
     def __len__(self) -> int:
         return len(self._by_ref)
@@ -138,28 +169,55 @@ def expand(
     floor = min((h.score for h in hits), default=0.0)
 
     for hop in range(1, max_hops + 1):
-        refs: set[str] = set()
+        # Keep the edge, not just the destination: which chunk cited which
+        # identifier. Collapsing this to a set of references loses the traversal
+        # path, and the path is what distinguishes reasoning from coincidence.
+        refs: dict[str, str] = {}  # identifier -> doc_id that cited it
         for hit in frontier:
-            refs |= extract_references(hit.chunk.text)
+            # A reference to a code the citing document already owns is
+            # self-description, not a cross-reference. Service docs enumerate
+            # every code of their service in an "## Error codes" section, so
+            # without this they act as hubs that spray hops across all of a
+            # service's unrelated faults — reaching related documents while
+            # traversing nothing the question turns on.
+            own = set(hit.chunk.error_codes)
+            for ref in extract_references(hit.chunk.text):
+                if ref in own:
+                    continue
+                refs.setdefault(ref, hit.chunk.doc_id)
         if not refs:
             break
 
-        scored: list[tuple[float, int]] = []
-        for ref in refs:
-            for position in graph.resolve(ref):
+        scored: list[tuple[bool, float, int, str, str]] = []
+        for ref, source_doc in refs.items():
+            for position, defines in graph.resolve_ranked(ref):
                 chunk = index.chunks[position]
                 if chunk.chunk_id in seen_chunks or chunk.doc_id in seen_docs:
                     continue
+                if chunk.doc_id == source_doc:
+                    continue  # a document citing its own code is not a hop
+                if chunk.source_type == SourceType.LOG:
+                    # Logs carry error codes as metadata, so an unfiltered hop
+                    # lands on raw log lines instead of the runbook explaining
+                    # the code. Logs are evidence and are reached deliberately
+                    # by trace expansion, which is the right mechanism for them.
+                    continue
                 similarity = float(index.matrix[position] @ qv)
-                scored.append((similarity, position))
+                scored.append((defines, similarity, position, ref, source_doc))
 
         if not scored:
             break
-        scored.sort(reverse=True)
+        # Defining documents first, then by similarity within each group. This
+        # is the whole point of the hop: follow a citation to the thing that
+        # explains it, not to whichever mentioning document most resembles the
+        # query — that one is what direct retrieval is already for.
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
         added: list[RetrievedChunk] = []
-        for similarity, position in scored[:per_hop_cap]:
-            if similarity < settings.multihop_min_similarity:
+        for defines, similarity, position, ref, source_doc in scored[:per_hop_cap]:
+            # A defining document is followed on the strength of the citation
+            # alone; a mere mention still has to look relevant to the question.
+            if not defines and similarity < settings.multihop_min_similarity:
                 continue
             chunk = index.chunks[position]
             seen_chunks.add(chunk.chunk_id)
@@ -173,6 +231,8 @@ def expand(
                     rank=len(out) + len(added),
                     provenance="reference_hop",
                     hop=hop,
+                    hop_from=source_doc,
+                    hop_via=ref,
                 )
             )
         if not added:
