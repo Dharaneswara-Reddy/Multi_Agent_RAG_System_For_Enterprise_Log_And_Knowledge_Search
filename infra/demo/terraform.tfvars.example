@@ -1,0 +1,50 @@
+# Copy to terraform.tfvars and edit. Real .tfvars files are gitignored.
+#
+# Every value here is already the default. The file exists to show what is worth
+# changing and what changing it costs.
+
+region  = "us-east-1"
+project = "aiops"
+
+# --- the two decisions that set the bill ------------------------------------
+
+# t4g.small (2 GB) does NOT fit: the application alone plateaus at 2.11 GB.
+# See README.md for the measurement. t4g.medium is $24.53/month, t4g.small
+# would be $12.26 — and would OOM.
+instance_type = "t4g.medium"
+
+# db.t4g.micro is the smallest PostgreSQL instance AWS sells, and 20 GB is the
+# minimum allocation. $11.68 + $2.30/month, and there is no cheaper managed
+# PostgreSQL — Aurora Serverless v2 starts at $0.12/ACU-hour, which is worse
+# unless you accept a ~15 s cold resume on the first request after idle.
+db_instance_class    = "db.t4g.micro"
+db_allocated_storage = 20
+
+# Checked against describe-orderable-db-instance-options: only 17.9 and 17.10
+# are orderable for db.t4g.micro, even though 17.5+ all exist.
+db_engine_version = "17.10"
+
+# --- application ------------------------------------------------------------
+
+# "1" keeps answers deterministic and extractive and needs no API key. Set to
+# "0" only after writing a real key into the SSM parameter, or every synthesis
+# call fails at request time instead of at deploy time.
+force_offline = "1"
+
+# The ECR repository starts empty. Leave this on the first apply, then rebuild
+# with the real tag — see README.md.
+# image_tag = "sha-abc123def456"
+
+# --- optional ---------------------------------------------------------------
+
+# Empty disables the SNS topic and all three alarms. With one instance and no
+# redundancy, "is it there at all" is the alert worth having.
+# alarm_email = "you@example.com"
+
+# Short on purpose: CloudWatch bills $0.50/GB ingested and $0.03/GB-month.
+log_retention_days = 7
+
+# "standard", not "unlimited". Under unlimited a sustained CPU spike bills
+# surcharge credits with no ceiling, which is the one thing a fixed credit
+# budget cannot absorb.
+cpu_credit_specification = "standard"

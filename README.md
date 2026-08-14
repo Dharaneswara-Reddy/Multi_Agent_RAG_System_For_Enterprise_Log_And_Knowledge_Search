@@ -585,25 +585,55 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 ## Deployment
 
-The system runs entirely on AWS with nothing on a laptop: a container image on
-ECS Fargate behind an ALB, Postgres for the audit trail and escalation queue,
-S3 for index artefacts, Secrets Manager for credentials.
+There are **two** architectures in this repository, and the difference between
+them is the point rather than an embarrassment.
 
-> **Written, not deployed.** There is no AWS account behind this, and Terraform
-> and the AWS CLI are not installed on the machine it was written on — so no
-> `terraform validate`, no `plan`, and no image build has run. It is a
-> considered starting point that needs its first `plan` read carefully, not
-> something known to stand up clean. Saying otherwise would be the dishonest
-> part.
+| | **Demo** — [infra/demo/](infra/demo/) | **Production** — [infra/](infra/) |
+|---|---|---|
+| Compute | 1 × EC2 t4g.medium, ECS on EC2 | ECS Fargate ARM64, 2–6 tasks |
+| **Availability** | **single instance, single AZ — not HA** | 2+ tasks, 2 AZs, circuit breaker |
+| **Autoscaling** | **none** (ASG min=max=1 replaces, does not scale) | target tracking on ECS CPU |
+| Load balancing | **none** — CloudFront is a CDN with one origin | ALB, path routing, 2 target groups |
+| Database | RDS PostgreSQL Single-AZ | RDS PostgreSQL Multi-AZ |
+| Networking | public subnet, **no NAT**; DB private, no route out | public/private tiers, NAT or endpoints |
+| Observability | 1 log group, 3 optional alarms | 4 alarms, SNS, Container Insights |
+| **Cost** | **~$44/month** | **~$76–131/month** |
+
+The demo is cheaper because capabilities were **removed**, not because
+something was optimised: no ALB (−$16.43), no NAT gateway (−$32.85), one task
+instead of two (−$14.42), Single-AZ (−$16.28), Parameter Store instead of
+Secrets Manager (−$0.80).
+
+**The demo deployment is not highly available, does not autoscale, and is not
+load balanced.** The production root genuinely is all three, and it is real
+implementable Terraform — it validates, its provider is pinned and locked — but
+it is not what runs. Both facts are stated because a claim that cannot survive
+someone reading the repository is worse than no claim.
+
+> **Status: validated, never applied.** `terraform validate` and `fmt` pass on
+> both roots against Terraform 1.14.3 and aws 6.59.0; the demo graph builds with
+> no cycles. Only the state backend in [infra/bootstrap/](infra/bootstrap/) has
+> actually been created. No `plan` has run against either application root.
 
 | Piece | Where | Note |
 |---|---|---|
-| Image | [Dockerfile](Dockerfile) | multi-stage; **models and index baked in** |
+| Image | [Dockerfile](Dockerfile) | multi-stage; **models baked in** |
 | Entrypoint | [docker/entrypoint.sh](docker/entrypoint.sh) | preflight, then `exec` so SIGTERM lands |
 | Local stack | [docker-compose.yml](docker-compose.yml) | API + UI + Postgres |
-| Infrastructure | [infra/](infra/) | VPC, ECR, ECS, ALB, RDS, S3, IAM, alarms |
+| **Demo infra** | [infra/demo/](infra/demo/) | EC2, ECS, RDS, S3, CloudFront |
+| **Production infra** | [infra/](infra/) | VPC, ECR, ECS, ALB, RDS, S3, IAM, alarms |
 | Pipelines | [.github/workflows/](.github/workflows/) | quality gate, then OIDC deploy |
 | Research | [docs/aws-deployment-research.md](docs/aws-deployment-research.md) | why these services |
+
+### Sizing the demo instance, by measurement
+
+`t4g.small` was the intuitive choice and it is wrong. The resident set of the
+application alone plateaus at **2.11 GB** after four queries and stays flat
+through eight — the ONNX Runtime arena reaching steady state, not a leak, and
+insensitive to thread count. With the ECS agent, the container runtime and the
+OS that is ~2.66 GB, so 2 GB does not fit and `t4g.medium` is required at
+$12.27/month more. Swap was rejected rather than used to hide the gap: paging
+ONNX inference is pathological.
 
 ### What had to change to make it cloud-native
 
@@ -615,9 +645,27 @@ when `AIOPS_DB_URL` is set. Selection is **strict** rather than falling back,
 because a deployment that quietly degraded to SQLite would keep answering
 questions while losing the audit trail.
 
+**…but "strict" had a hole, and it was the dangerous kind.** The rule rejected a
+*malformed* URL and quietly accepted a *missing* one, falling through to SQLite.
+In a container that is a file that dies with the task, and nothing about the
+failure is observable: the task starts, the health check passes, the answers are
+correct, and only the durable state is wrong. `AIOPS_REQUIRE_POSTGRES=1` — set
+on every cloud deployment — turns that path into a refusal to start. The flag is
+explicit rather than inferred from `db_url`, because the condition it exists to
+catch is the absence of the very setting it would have to be inferred from.
+
 **Index artefacts had to come from somewhere.** `AIOPS_INDEX_URI=s3://…` fetches
 them at startup. They are data, not code — baking them in permanently would tie
 a reindex to an application release.
+
+**So did the documents.** `AIOPS_DOCS_URI=s3://…` syncs the markdown corpus
+before ingestion, which makes S3 the source of truth for knowledge in the cloud.
+Same argument as the index, one step earlier: with the corpus baked in, every
+correction to a runbook is an application release, and the running system's
+knowledge cannot be inspected or restored independently of the container serving
+it. An empty prefix is an error rather than an empty corpus — otherwise a
+misspelled bucket produces a system that starts cleanly and abstains from every
+question, which looks exactly like appropriate caution.
 
 **Cold starts had to be designed away.** Two ONNX models (~250MB) plus a full
 embedding pass are startup costs, and a task paying them fails its ALB health
