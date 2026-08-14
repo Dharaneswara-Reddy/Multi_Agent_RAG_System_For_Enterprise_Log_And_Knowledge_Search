@@ -28,8 +28,8 @@ data "aws_cloudfront_origin_request_policy" "cors_s3" {
   name = "Managed-CORS-S3Origin"
 }
 
-data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
-  name = "Managed-AllViewerExceptHostHeader"
+data "aws_cloudfront_origin_request_policy" "all_viewer" {
+  name = "Managed-AllViewer"
 }
 
 resource "aws_cloudfront_distribution" "app" {
@@ -95,12 +95,24 @@ resource "aws_cloudfront_distribution" "app" {
     # CachingDisabled: every response here is session state. Caching would serve
     # one visitor's answer to the next.
     cache_policy_id = data.aws_cloudfront_cache_policy.disabled.id
-    # AllViewerExceptHostHeader forwards cookies, query strings and the
-    # Upgrade/Connection headers the WebSocket handshake needs, while replacing
-    # Host with the origin's own name. Plain AllViewer would forward the
-    # viewer's Host, and the request would arrive at the origin for a hostname
-    # it does not answer to.
-    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+
+    # AllViewer, forwarding the viewer's Host — and the Host header is the whole
+    # point rather than an incidental detail.
+    #
+    # Streamlit's XSRF protection compares the browser's `Origin` against the
+    # `Host` it received. AllViewerExceptHostHeader replaces Host with the
+    # origin's own name, so Origin (the CloudFront domain) never matched Host
+    # (the ALB domain) and every browser WebSocket upgrade was answered with
+    # 403. The page then loads, spins on "Connecting", and retries forever.
+    #
+    # This is invisible to curl, which sends no Origin and therefore gets a
+    # clean 101 — the reason it survived the first round of verification.
+    #
+    # The alternative fix is --server.enableXsrfProtection=false, which trades
+    # a real protection for a configuration convenience. Forwarding Host keeps
+    # the check working and simply makes it true. The ALB has a single default
+    # action and no host-based rules, so it answers to any Host it is given.
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
   }
 
   # Static assets, cached at the edge. This is the behaviour that makes the page
