@@ -79,6 +79,28 @@ class Settings(BaseSettings):
     # Requires the optional driver: pip install ".[s3]"
     docs_uri: str | None = None
 
+    # --- LLM provider ---
+    # "anthropic" (default) or "groq". Groq is OpenAI-wire-compatible and has a
+    # free tier, which is why it exists here — the Anthropic path is unchanged
+    # and still the default, so nothing about local development or CI moves.
+    #
+    # Selection is a setting rather than an inference from which key happens to
+    # be present: with both keys set, "whichever we found first" is not a
+    # decision anyone made, and it would change behaviour based on environment
+    # ordering.
+    llm_provider: str = "anthropic"
+
+    # Groq model IDs. Configurable because Groq's catalogue moves faster than
+    # this repository does — check https://console.groq.com/docs/models and
+    # override rather than editing code.
+    groq_reasoning_model: str = "llama-3.3-70b-versatile"
+    groq_cheap_model: str = "llama-3.1-8b-instant"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+
+    # 429 is the steady state on a free key, not an exception. Retries honour
+    # the server's `retry-after` header rather than guessing.
+    groq_max_retries: int = 3
+
     # --- ONNX Runtime memory ---
     # Disables ONNX Runtime's CPU arena allocator. Measured on the real corpus
     # over 8 queries: peak RSS 2146 MB -> 1563 MB, a 29.6% reduction, for a

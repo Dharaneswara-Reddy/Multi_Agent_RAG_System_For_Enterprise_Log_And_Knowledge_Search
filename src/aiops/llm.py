@@ -276,11 +276,33 @@ def parse_json_loose(text: str) -> dict[str, Any]:
     return {}
 
 
-_CLIENT: LLMClient | None = None
+_CLIENT: Any | None = None
 
 
-def get_llm() -> LLMClient:
+def get_llm() -> Any:
+    """The configured provider's client.
+
+    Returns `LLMClient` (Anthropic) or `GroqClient`. Both expose the same
+    `complete` / `complete_json` / `available` surface, so no caller needs to
+    know which one it holds — which is the point: the provider is a deployment
+    decision, not something the agent graph should reason about.
+    """
     global _CLIENT
     if _CLIENT is None:
-        _CLIENT = LLMClient()
+        if settings.llm_provider == "groq":
+            from aiops.llm_groq import GroqClient
+
+            _CLIENT = GroqClient()
+        elif settings.llm_provider == "anthropic":
+            _CLIENT = LLMClient()
+        else:
+            raise LLMUnavailable(
+                f"AIOPS_LLM_PROVIDER is {settings.llm_provider!r}; expected 'anthropic' or 'groq'."
+            )
     return _CLIENT
+
+
+def reset_llm() -> None:
+    """Drop the cached client. For tests that switch provider mid-process."""
+    global _CLIENT
+    _CLIENT = None

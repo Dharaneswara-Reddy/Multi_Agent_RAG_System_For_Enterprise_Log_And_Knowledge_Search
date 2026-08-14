@@ -167,6 +167,17 @@ def is_offline() -> bool:
 
     if os.getenv("AIOPS_FORCE_OFFLINE") == "1":
         return True
+
+    # Groq's only credential is an API key — no profile on disk, no federation,
+    # so its absence is conclusive and none of the Anthropic fallbacks below
+    # apply. Checked first and returned from unconditionally: with the provider
+    # set to groq, an ANTHROPIC_API_KEY left over in the environment must not
+    # make the system look online for a provider it will never call.
+    from aiops.config import settings
+
+    if settings.llm_provider == "groq":
+        return not os.getenv("GROQ_API_KEY")
+
     if os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"):
         return False
 
