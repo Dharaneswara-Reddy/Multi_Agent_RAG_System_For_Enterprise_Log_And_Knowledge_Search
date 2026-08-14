@@ -121,8 +121,19 @@ def llm_variants(question: str, n: int = 2) -> list[str]:
     base = deterministic_variants(question)
     if not settings.multiquery_use_llm:
         return base
+    # The broad `except` below is deliberate — see the docstring — but it also
+    # meant this block could never report that it was broken, and it was: it
+    # imported a `complete_json` that exists only as a method, passed a `model`
+    # keyword neither client accepts, and treated the `(data, result)` tuple as
+    # a dict. Any one of those raises, is swallowed, and expansion silently
+    # degrades to the deterministic variants. It stayed hidden because
+    # `multiquery_use_llm` is off by default, so the path is never entered.
+    #
+    # Routing by `route="cheap"` rather than naming a model is also what keeps
+    # this provider-agnostic: the Groq client resolves its own cheap model, so
+    # an Anthropic model ID can no longer leak into a Groq request.
     try:
-        from aiops.llm import complete_json
+        from aiops.llm import get_llm
         from aiops.offline import is_offline
 
         if is_offline():
@@ -134,16 +145,17 @@ def llm_variants(question: str, n: int = 2) -> list[str]:
             },
             "required": ["queries"],
         }
-        data = complete_json(
+        data, _result = get_llm().complete_json(
+            question,
+            schema,
             system=(
                 "Rewrite the user's question as short search queries for a corpus of SRE "
                 "runbooks, ADRs, post-mortems and service documentation. Use the vocabulary "
                 "an engineer would write in a runbook, not conversational phrasing. Preserve "
                 "any error codes exactly. Return only the queries."
             ),
-            prompt=question,
-            schema=schema,
-            model=settings.cheap_model,
+            route="cheap",
+            agent="multiquery",
         )
         extra = [q.strip() for q in (data.get("queries") or []) if isinstance(q, str) and q.strip()]
         for q in extra:
