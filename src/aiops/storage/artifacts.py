@@ -123,3 +123,55 @@ def fetch_index_artifacts(
             if name in REQUIRED_ARTIFACTS:
                 raise
     return cache_dir
+
+
+def fetch_documents(
+    uri: str,
+    docs_dir: Path,
+    *,
+    endpoint_url: str | None = None,
+    client: Any | None = None,
+) -> int:
+    """Sync the markdown corpus from S3 into `docs_dir`. Returns the file count.
+
+    S3 is the source of truth for knowledge documents in a cloud deployment, so
+    that re-indexing does not require an application release and a corpus
+    correction does not require a rebuild. The image still ships code and
+    models; it no longer ships the knowledge.
+
+    Downloads into the local directory rather than reading from S3 lazily,
+    because the ingestion path globs a directory and reuses paths as stable
+    document ids. Keeping the filesystem shape means nothing downstream — the
+    chunker, the reference graph, the citation resolver — has to learn about
+    object storage.
+
+    An empty prefix is an error, not an empty corpus. A deployment whose bucket
+    is missing or misspelled would otherwise start, index nothing, and answer
+    every question with an abstention that looks exactly like a working system
+    being appropriately cautious.
+    """
+    location = parse_s3_uri(uri)
+    docs_dir = Path(docs_dir)
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    s3 = client if client is not None else _s3_client(endpoint_url)
+    paginator = s3.get_paginator("list_objects_v2")
+
+    count = 0
+    for page in paginator.paginate(Bucket=location.bucket, Prefix=location.prefix):
+        for entry in page.get("Contents", ()):
+            key = entry["Key"]
+            if not key.lower().endswith(".md"):
+                continue
+            # Flattened deliberately: `load_documents` globs one level, and a
+            # nested key would silently never be read.
+            s3.download_file(location.bucket, key, str(docs_dir / Path(key).name))
+            count += 1
+
+    if count == 0:
+        raise FileNotFoundError(
+            f"no .md objects under {uri} — the corpus is the source of truth for "
+            "a cloud deployment, and an empty one would start cleanly and abstain "
+            "from every question. Upload the corpus, or check the prefix."
+        )
+    return count

@@ -20,6 +20,7 @@ import pytest
 
 from aiops.schemas import ErrorCodeEntry
 from aiops.storage import (
+    CloudPersistenceError,
     MissingDependency,
     PostgresBackend,
     SQLiteBackend,
@@ -29,7 +30,7 @@ from aiops.storage import (
     parse_s3_uri,
     reset_backend,
 )
-from aiops.storage.artifacts import fetch_index_artifacts
+from aiops.storage.artifacts import fetch_documents, fetch_index_artifacts
 from aiops.storage.postgres_backend import normalise_dsn
 
 # A fictional DSN, assembled from fragments rather than written as one literal
@@ -248,6 +249,75 @@ def test_unsupported_db_url_scheme_is_rejected_rather_than_ignored(monkeypatch):
     from aiops.config import settings
 
     monkeypatch.setattr(settings, "db_url", _mysql_dsn())
+    with pytest.raises(ValueError, match="not supported"):
+        get_backend()
+
+
+# --- AIOPS_REQUIRE_POSTGRES -------------------------------------------------
+#
+# The regression these guard against is not a crash, it is a *success*: before
+# the flag existed, a cloud task with no AIOPS_DB_URL started cleanly on a
+# container-local SQLite file and threw away every audit record when it was
+# replaced. Nothing observable failed, which is why it needs a test rather than
+# an alarm.
+
+
+def test_require_postgres_rejects_a_missing_db_url(monkeypatch):
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", None)
+    monkeypatch.setattr(settings, "require_postgres", True)
+
+    with pytest.raises(CloudPersistenceError, match="AIOPS_DB_URL is empty"):
+        get_backend()
+
+
+def test_require_postgres_rejects_an_empty_string_db_url(monkeypatch):
+    """An unset environment variable often arrives as "" rather than None."""
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", "")
+    monkeypatch.setattr(settings, "require_postgres", True)
+
+    with pytest.raises(CloudPersistenceError):
+        get_backend()
+
+
+def test_require_postgres_rejects_an_explicit_sqlite_path(tmp_path, monkeypatch):
+    """An explicit path is not a fallback, but the cloud still has no file to use."""
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", _pg_dsn())
+    monkeypatch.setattr(settings, "require_postgres", True)
+
+    with pytest.raises(CloudPersistenceError, match="caller bug"):
+        get_backend(tmp_path / "explicit.db")
+
+
+def test_require_postgres_still_selects_postgres_when_configured(monkeypatch):
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", _pg_dsn())
+    monkeypatch.setattr(settings, "require_postgres", True)
+
+    assert isinstance(get_backend(), PostgresBackend)
+
+
+def test_require_postgres_defaults_off_so_local_development_is_unchanged(monkeypatch):
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", None)
+    assert settings.require_postgres is False
+    assert isinstance(get_backend(), SQLiteBackend)
+
+
+def test_require_postgres_does_not_mask_a_bad_scheme(monkeypatch):
+    """A wrong URL should say so, not be reported as a missing one."""
+    from aiops.config import settings
+
+    monkeypatch.setattr(settings, "db_url", _mysql_dsn())
+    monkeypatch.setattr(settings, "require_postgres", True)
+
     with pytest.raises(ValueError, match="not supported"):
         get_backend()
 
@@ -560,3 +630,102 @@ def test_non_s3_index_uri_is_treated_as_a_local_directory(monkeypatch, tmp_path)
 
     monkeypatch.setattr(settings, "index_uri", str(tmp_path / "mounted"))
     assert _resolve_artifact_dir(None) == tmp_path / "mounted"
+
+
+# --- S3 as the source of truth for knowledge documents ----------------------
+
+
+class FakeS3Listing:
+    """A paginated bucket listing plus downloads, enough for `fetch_documents`."""
+
+    def __init__(self, keys, page_size=2):
+        self.keys = list(keys)
+        self.page_size = page_size
+        self.downloaded: list[str] = []
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return self
+
+    def paginate(self, Bucket, Prefix):  # noqa: N803 - boto3's parameter names
+        matching = [k for k in self.keys if k.startswith(Prefix)]
+        for i in range(0, len(matching), self.page_size) or [0]:
+            yield {"Contents": [{"Key": k} for k in matching[i : i + self.page_size]]}
+
+    def download_file(self, bucket, key, destination):
+        self.downloaded.append(key)
+        with open(destination, "w") as fh:
+            fh.write(f"# {key}\n")
+
+
+def test_fetch_documents_downloads_only_markdown(tmp_path):
+    fake = FakeS3Listing(
+        ["docs/a.md", "docs/b.md", "docs/index.json", "docs/notes.txt", "other/c.md"]
+    )
+    count = fetch_documents("s3://bucket/docs/", tmp_path / "docs", client=fake)
+
+    assert count == 2
+    assert sorted(p.name for p in (tmp_path / "docs").glob("*")) == ["a.md", "b.md"]
+    assert "docs/index.json" not in fake.downloaded
+    assert "other/c.md" not in fake.downloaded
+
+
+def test_fetch_documents_flattens_nested_keys(tmp_path):
+    """`load_documents` globs one level, so a nested key must not vanish."""
+    fake = FakeS3Listing(["docs/runbooks/deep.md"])
+    fetch_documents("s3://bucket/docs/", tmp_path / "docs", client=fake)
+
+    assert (tmp_path / "docs" / "deep.md").exists()
+
+
+def test_fetch_documents_treats_an_empty_prefix_as_an_error(tmp_path):
+    """An empty corpus starts cleanly and abstains from everything — never silent."""
+    fake = FakeS3Listing(["docs/readme.txt"])
+    with pytest.raises(FileNotFoundError, match="source of truth"):
+        fetch_documents("s3://bucket/docs/", tmp_path / "docs", client=fake)
+
+
+def test_load_documents_syncs_from_s3_when_docs_uri_is_set(tmp_path, monkeypatch):
+    from aiops.config import settings
+    from aiops.ingestion import documents as documents_module
+
+    seen: dict[str, object] = {}
+
+    def fake_fetch(uri, docs_dir, **kwargs):
+        seen["uri"] = uri
+        (docs_dir).mkdir(parents=True, exist_ok=True)
+        (docs_dir / "svc.md").write_text(
+            "---\ntitle: Synced\nsource_type: service_doc\n---\n\nFrom object storage.\n",
+            encoding="utf-8",
+        )
+        return 1
+
+    monkeypatch.setattr(settings, "docs_uri", "s3://bucket/docs/")
+    monkeypatch.setattr(settings, "docs_dir", tmp_path / "synced")
+    monkeypatch.setattr("aiops.storage.artifacts.fetch_documents", fake_fetch)
+
+    chunks = documents_module.load_documents()
+
+    assert seen["uri"] == "s3://bucket/docs/"
+    assert any(c.doc_id == "svc" for c in chunks)
+
+
+def test_load_documents_with_an_explicit_dir_never_touches_s3(tmp_path, monkeypatch):
+    """Tests, local runs and setup.py pass a path and must stay offline."""
+    from aiops.config import settings
+    from aiops.ingestion import documents as documents_module
+
+    def explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("fetch_documents called despite an explicit docs_dir")
+
+    monkeypatch.setattr(settings, "docs_uri", "s3://bucket/docs/")
+    monkeypatch.setattr("aiops.storage.artifacts.fetch_documents", explode)
+
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "d.md").write_text(
+        "---\ntitle: Local\nsource_type: service_doc\n---\n\nOn disk.\n", encoding="utf-8"
+    )
+
+    chunks = documents_module.load_documents(local)
+    assert any(c.doc_id == "d" for c in chunks)

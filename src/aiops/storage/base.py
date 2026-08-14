@@ -308,3 +308,19 @@ class MissingDependency(RuntimeError):
     three frames down reach the operator, because "no module named psycopg" does
     not tell anyone that `AIOPS_DB_URL` is what asked for it.
     """
+
+
+class CloudPersistenceError(RuntimeError):
+    """SQLite was reachable for in a deployment that forbids it.
+
+    `AIOPS_REQUIRE_POSTGRES=1` is set on every cloud deployment, and its whole
+    job is to turn a silent degradation into a refusal to start. Without it the
+    failure is invisible: a missing or misspelled `AIOPS_DB_URL` leaves the
+    application running happily on a SQLite file inside an ephemeral container,
+    answering questions correctly while every audit record and every queued
+    escalation is discarded the next time the task is replaced.
+
+    Nothing about that failure is observable from the outside — the health check
+    passes, the UI works, the answers are right — which is exactly why it has to
+    be an exception at startup rather than a warning in a log nobody reads.
+    """

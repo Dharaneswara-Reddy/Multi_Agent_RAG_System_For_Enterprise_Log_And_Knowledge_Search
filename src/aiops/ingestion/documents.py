@@ -160,8 +160,22 @@ def _pack(sections: list[tuple[str, str]], budget: int, overlap: int) -> list[tu
 
 
 def load_documents(docs_dir: Path | None = None) -> list[Chunk]:
-    """Read every markdown file in `docs_dir` and return retrieval-ready chunks."""
+    """Read every markdown file in `docs_dir` and return retrieval-ready chunks.
+
+    When `AIOPS_DOCS_URI` names an S3 prefix and no explicit directory was
+    passed, the corpus is synced down first: in a cloud deployment S3 is the
+    source of truth, and the image ships code and models but not knowledge.
+    An explicit `docs_dir` always wins, which is what keeps the tests, the local
+    workflow and `scripts/setup.py` reading the filesystem unchanged.
+    """
+    explicit = docs_dir is not None
     docs_dir = docs_dir or settings.docs_dir
+
+    if not explicit and settings.docs_uri:
+        from aiops.storage.artifacts import fetch_documents
+
+        fetch_documents(settings.docs_uri, Path(docs_dir))
+
     chunks: list[Chunk] = []
 
     for path in sorted(Path(docs_dir).glob("*.md")):

@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # Requires the optional driver: pip install ".[postgres]"
     db_url: str | None = None
 
+    # Set to 1 on every cloud deployment. Turns the SQLite default from a
+    # convenience into an error, so that a missing or misspelled `AIOPS_DB_URL`
+    # stops the process instead of quietly producing a container-local database.
+    #
+    # The strictness is the point. Without this flag the bad case is invisible:
+    # the task starts, the health check passes, answers are correct, and only the
+    # durable state is wrong — audit records and escalations accumulate in a file
+    # that dies with the container. Left as a default-off flag rather than
+    # inferred from `db_url` because "no URL" is precisely the condition it has
+    # to catch, and inferring it from the thing that is missing cannot work.
+    require_postgres: bool = False
+
     # --- index artefacts ---
     # Unset means read `vectors.npy` / `chunks.pkl` / `stats.json` from
     # `index_dir`, exactly as before. Set to `s3://bucket/prefix/` to have
@@ -52,6 +64,34 @@ class Settings(BaseSettings):
     # Where downloaded artefacts land. Deliberately not `index_dir`, so a remote
     # fetch can never overwrite or be confused with a locally built index.
     index_cache_dir: Path = ROOT / "data" / "index-cache"
+
+    # --- knowledge documents ---
+    # Unset means read the corpus from `docs_dir`, which is what local runs, the
+    # tests and `scripts/setup.py` do. Set to `s3://bucket/docs/` and the corpus
+    # is synced down before ingestion.
+    #
+    # This is what makes S3 the source of truth for knowledge in the cloud, and
+    # it exists for the same reason as `index_uri`: documents are data. Baking
+    # them into the image means every correction to a runbook is an application
+    # release, and it means the running system's knowledge cannot be inspected
+    # or restored independently of the container that happens to be serving it.
+    #
+    # Requires the optional driver: pip install ".[s3]"
+    docs_uri: str | None = None
+
+    # --- ONNX Runtime memory ---
+    # Disables ONNX Runtime's CPU arena allocator. Measured on the real corpus
+    # over 8 queries: peak RSS 2146 MB -> 1563 MB, a 29.6% reduction, for a
+    # 24.5% latency increase (6.73s -> 8.38s mean per query).
+    #
+    # Set in the cloud, off locally. It is what makes the service fit a 2 GB
+    # Fargate task instead of needing 3 GB, and on a demo answering 10-20
+    # questions a month the latency is the cheapest thing available to spend.
+    #
+    # Retrieval is provably unaffected: identical ordering and identical scores
+    # on 8/8 queries across 240 reranked candidates, maximum difference 0.0.
+    # See aiops/onnx_tuning.py.
+    onnx_disable_cpu_arena: bool = False
     # For MinIO / localstack. None means real AWS, and credentials come from
     # boto3's default chain — the task role on Fargate, never settings.
     s3_endpoint_url: str | None = None
