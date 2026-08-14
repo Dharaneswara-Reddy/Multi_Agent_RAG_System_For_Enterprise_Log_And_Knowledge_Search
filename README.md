@@ -543,6 +543,7 @@ src/aiops/
   config.py            all tunables in one place
   schemas.py           shared pydantic contracts
   llm.py               Anthropic client: routing, cost, tracing
+  llm_groq.py          Groq client, same surface, OpenAI wire format
   offline.py           deterministic stand-in for credential-free runs
   ingestion/
     corpus.py          synthetic Meridian corpus generator
@@ -571,10 +572,14 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `AIOPS_LLM_PROVIDER` | `anthropic` | `anthropic` or `groq` |
 | `ANTHROPIC_API_KEY` | — | enables synthesis + quality grading |
+| `GROQ_API_KEY` | — | same, when the provider is `groq` |
 | `AIOPS_FORCE_OFFLINE` | `0` | force the deterministic path (CI uses this) |
-| `AIOPS_REASONING_MODEL` | `claude-opus-5` | synthesis |
-| `AIOPS_CHEAP_MODEL` | `claude-haiku-4-5` | routing, extraction |
+| `AIOPS_REASONING_MODEL` | `claude-opus-5` | synthesis, Anthropic |
+| `AIOPS_CHEAP_MODEL` | `claude-haiku-4-5` | routing and extraction, Anthropic |
+| `AIOPS_GROQ_REASONING_MODEL` | `llama-3.3-70b-versatile` | synthesis, Groq |
+| `AIOPS_GROQ_CHEAP_MODEL` | `llama-3.1-8b-instant` | routing and extraction, Groq |
 | `AIOPS_TOP_K` | `8` | retrieved chunks |
 | `AIOPS_DENSE_WEIGHT` | `0.80` | dense vs BM25 blend (sweep optimum) |
 | `AIOPS_DOC_CHUNK_TOKENS` | `160` | chunk ceiling (sweep optimum) |
