@@ -24,6 +24,12 @@ _LOCK = threading.Lock()
 def _model(name: str):
     from fastembed import TextEmbedding
 
+    from aiops.onnx_tuning import apply_onnx_memory_settings
+
+    # Must precede construction: the setting is installed as the default for
+    # sessions created afterwards, and FastEmbed builds its session here.
+    apply_onnx_memory_settings()
+
     return TextEmbedding(model_name=name)
 
 

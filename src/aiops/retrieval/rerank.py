@@ -31,6 +31,12 @@ _LOCK = threading.Lock()
 def _model(name: str):
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
+    from aiops.onnx_tuning import apply_onnx_memory_settings
+
+    # The reranker dominates the memory profile — it scores 30 pairs of varying
+    # length per query, which is exactly the shape churn the arena pools for.
+    apply_onnx_memory_settings()
+
     return TextCrossEncoder(model_name=name)
 
 
