@@ -34,12 +34,68 @@ permissions:
   id-token: write # required to mint the OIDC token
 
 jobs:
-  build:
+  # Does this repository actually have what the deploy needs?
+  #
+  # Without this gate the workflow fails on every green CI run, because it is
+  # wired for an OIDC deployment that has not been provisioned: no
+  # AWS_DEPLOY_ROLE_ARN secret, and none of the vars below. The first AWS step
+  # then dies with "Input required and not supplied: aws-region", which reads
+  # like a broken workflow rather than an unconfigured one.
+  #
+  # An unconfigured deploy is not a failure — nothing is wrong with the commit,
+  # and marking it red trains everyone to ignore red. So this reports what is
+  # missing in the run summary and skips, while a fully configured repository
+  # is unaffected and deploys exactly as before.
+  preflight:
     # Skip when CI failed. `workflow_run` fires on completion regardless of
     # outcome, so without this a red build would still deploy.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check that the deploy is configured
+        id: check
+        # Read through env rather than interpolating directly: a secret spliced
+        # into a shell command is one unlucky value away from a syntax error,
+        # and `-n` on an env var cannot be tricked by its contents.
+        env:
+          ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$ROLE_ARN" ]        || missing="$missing\n  - secret AWS_DEPLOY_ROLE_ARN"
+          [ -n "$ECR_REPOSITORY" ]  || missing="$missing\n  - variable ECR_REPOSITORY"
+          [ -n "$ECS_CLUSTER" ]     || missing="$missing\n  - variable ECS_CLUSTER"
+          [ -n "$ECS_SERVICE" ]     || missing="$missing\n  - variable ECS_SERVICE"
+          [ -n "$ECS_TASK_FAMILY" ] || missing="$missing\n  - variable ECS_TASK_FAMILY"
+
+          if [ -n "$missing" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Deploy skipped — not configured"
+              echo
+              echo "This repository has no OIDC deployment credentials, so the build"
+              echo "and rollout were skipped rather than failed. Missing:"
+              echo -e "$missing"
+              echo
+              echo "AWS_REGION is optional and defaults to us-east-1."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Deploy is not configured; skipping."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy is configured."
+          fi
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -66,7 +122,10 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          # Defaulted rather than required: an unset AWS_REGION is what failed
+          # this workflow with "Input required and not supplied: aws-region",
+          # and every resource in infra/demo lives in us-east-1 anyway.
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
           role-session-name: gha-deploy-${{ github.run_id }}
 
       - name: Log in to ECR
@@ -145,7 +204,10 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          # Defaulted rather than required: an unset AWS_REGION is what failed
+          # this workflow with "Input required and not supplied: aws-region",
+          # and every resource in infra/demo lives in us-east-1 anyway.
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
           role-session-name: gha-deploy-${{ github.run_id }}
 
       # Not to push anything — only to learn the registry hostname, so the
