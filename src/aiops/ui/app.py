@@ -148,7 +148,13 @@ with tab_ask:
         if cols[i % 3].button(q[:52] + ("…" if len(q) > 52 else ""), key=f"s{i}", width='stretch'):
             st.session_state.question = q
 
-    question = st.text_area("Question", key="question", height=80, label_visibility="collapsed")
+    # max_chars matches the guardrail's own cap. The guardrail truncates before
+    # scanning so this is not load-bearing, but stopping an oversized paste in
+    # the browser is cheaper than shipping it over the websocket to a 0.5 vCPU
+    # task and truncating it there.
+    question = st.text_area(
+        "Question", key="question", height=80, label_visibility="collapsed", max_chars=8000
+    )
     run = st.button("Ask the copilot", type="primary")
 
     if run and question.strip():

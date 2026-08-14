@@ -72,6 +72,15 @@ class OutputCheck:
 # --------------------------------------------------------------------------
 
 PII_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
+    # Quadratic on adversarial input, deliberately left as-is: the bound lives
+    # in check_input, which truncates before scanning. The cost is not the
+    # domain-side ambiguity but the scan itself — at every start position
+    # `[\w.%-]+` consumes a long run of word characters looking for an '@' that
+    # never comes, which is O(n) work at O(n) positions. Rewriting the domain
+    # as `[\w-]+(?:\.[\w-]+)+` was measured at 1140ms against the original's
+    # 1138ms on 32k chars, and a fully possessive variant at 1804ms — no
+    # rewrite of this pattern fixes it, so do not "optimise" it and assume the
+    # cap is redundant. Bounded input is the only thing keeping this cheap.
     ("email", re.compile(r"\b[\w.%-]+@[\w.-]+\.[A-Za-z]{2,}\b"), "[REDACTED_EMAIL]"),
     # 13-19 digits with optional separators — card-shaped. Validated by Luhn below.
     ("credit_card", re.compile(r"\b(?:\d[ -]?){13,19}\b"), "[REDACTED_CARD]"),
@@ -172,16 +181,33 @@ def detect_injection(text: str) -> list[GuardrailFinding]:
 
 
 def check_input(text: str) -> InputCheck:
-    findings = detect_injection(text)
-    redacted, pii_findings, count = redact_pii(text)
-    findings.extend(pii_findings)
-    if len(text.strip()) < 3:
-        findings.append(GuardrailFinding("empty_query", Severity.BLOCK, "query too short"))
+    # Truncate first, scan second. The order is the whole point.
+    #
+    # This previously scanned the full untruncated input and applied the 8000
+    # cap afterwards, which made the cap decorative: the expensive work had
+    # already happened. `redact_pii`'s email pattern is quadratic in the input
+    # length — `[\w.%-]+` and `[\w.-]+` both admit '.', so a string of "a.a.a…"
+    # gives the engine an ambiguous split to backtrack over. Measured on this
+    # corpus, cost grew 4x per doubling: 8k chars 73ms, 32k chars 1.14s, and a
+    # 200KB paste is roughly a hundred seconds of CPU.
+    #
+    # That was reachable by any anonymous visitor through the public question
+    # box, against a single 0.5 vCPU task, holding the GIL — enough to wedge
+    # the console for everyone and eventually fail the ALB health check. The
+    # FastAPI surface was never exposed to it, because AskRequest already
+    # bounds the field at 8000; only the Streamlit path lacked the guard.
+    findings: list[GuardrailFinding] = []
     if len(text) > 8000:
         findings.append(
             GuardrailFinding("oversized_query", Severity.WARN, f"{len(text)} chars, truncating")
         )
-        redacted = redacted[:8000]
+        text = text[:8000]
+
+    findings.extend(detect_injection(text))
+    redacted, pii_findings, count = redact_pii(text)
+    findings.extend(pii_findings)
+    if len(text.strip()) < 3:
+        findings.append(GuardrailFinding("empty_query", Severity.BLOCK, "query too short"))
     return InputCheck(text=redacted, findings=findings, redactions=count)
 
 
