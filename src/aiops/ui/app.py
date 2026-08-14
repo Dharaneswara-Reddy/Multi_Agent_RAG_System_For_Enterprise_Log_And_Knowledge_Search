@@ -114,9 +114,12 @@ with st.sidebar:
     settings.dense_weight = dense_weight
 
     st.divider()
+    # Resolved through the active provider. Naming the Anthropic models while
+    # Groq answered the question made the caption a claim the deployment did
+    # not support.
     st.caption(
-        f"models · {settings.reasoning_model} (synthesis) / "
-        f"{settings.cheap_model} (routing)"
+        f"models · {settings.active_reasoning_model} (synthesis) / "
+        f"{settings.active_cheap_model} (routing) · via {settings.llm_provider}"
     )
 
 
@@ -188,7 +191,15 @@ with tab_ask:
         left, right = st.columns([3, 2])
         with left:
             st.markdown("#### Answer")
-            st.markdown(f'<div class="aiops-answer">{answer.answer}</div>', unsafe_allow_html=True)
+            # Rendered as Markdown, not injected as HTML. Wrapping the answer in
+            # a raw <div> stopped Streamlit's Markdown parser from running on it,
+            # so headings, bullets and bold arrived as literal characters and the
+            # blank lines between sections collapsed under HTML whitespace rules
+            # — the model was formatting correctly and the UI was flattening it.
+            # The wrapper also styled nothing: no .aiops-answer rule was ever
+            # defined. And because the answer is model output, unsafe_allow_html
+            # made it an HTML injection sink for whatever the model emitted.
+            st.markdown(answer.answer)
 
             if answer.citations:
                 st.markdown("#### Evidence")
