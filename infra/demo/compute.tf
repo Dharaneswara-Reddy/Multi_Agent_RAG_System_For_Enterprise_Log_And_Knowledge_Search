@@ -99,6 +99,7 @@ resource "aws_ecs_task_definition" "app" {
       secrets = [
         { name = "AIOPS_DB_PASSWORD", valueFrom = aws_ssm_parameter.db_password.arn },
         { name = "ANTHROPIC_API_KEY", valueFrom = aws_ssm_parameter.anthropic_api_key.arn },
+        { name = "GROQ_API_KEY", valueFrom = aws_ssm_parameter.groq_api_key.arn },
       ]
 
       logConfiguration = {

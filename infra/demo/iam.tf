@@ -30,10 +30,14 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
 # container, so its blast radius is exactly the set of parameters listed here.
 data "aws_iam_policy_document" "execution_secrets" {
   statement {
-    sid       = "ReadInjectedParameters"
-    effect    = "Allow"
-    actions   = ["ssm:GetParameters"]
-    resources = [aws_ssm_parameter.db_password.arn, aws_ssm_parameter.anthropic_api_key.arn]
+    sid     = "ReadInjectedParameters"
+    effect  = "Allow"
+    actions = ["ssm:GetParameters"]
+    resources = [
+      aws_ssm_parameter.db_password.arn,
+      aws_ssm_parameter.anthropic_api_key.arn,
+      aws_ssm_parameter.groq_api_key.arn,
+    ]
   }
 
   statement {

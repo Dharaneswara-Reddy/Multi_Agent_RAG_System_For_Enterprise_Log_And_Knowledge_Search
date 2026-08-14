@@ -57,6 +57,10 @@ locals {
     # retrieval bit-identical. This is what makes a 2 GB task viable.
     { name = "AIOPS_ONNX_DISABLE_CPU_ARENA", value = "1" },
 
+    # Which provider the LLM layer calls. "groq" has a free tier, which is the
+    # reason it is here; "anthropic" remains the default everywhere else.
+    { name = "AIOPS_LLM_PROVIDER", value = var.llm_provider },
+
     { name = "AIOPS_FORCE_OFFLINE", value = var.force_offline },
     { name = "AIOPS_UI_PORT", value = tostring(var.container_port) },
     { name = "AWS_REGION", value = var.region },

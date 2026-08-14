@@ -59,6 +59,11 @@ output "anthropic_key_parameter" {
   value       = aws_ssm_parameter.anthropic_api_key.name
 }
 
+output "groq_key_parameter" {
+  description = "Populate out of band: aws ssm put-parameter --overwrite --type SecureString --name <this> --value gsk_..."
+  value       = aws_ssm_parameter.groq_api_key.name
+}
+
 output "log_group" {
   value = aws_cloudwatch_log_group.app.name
 }

@@ -150,6 +150,24 @@ variable "alarm_email" {
 
 # --- application -----------------------------------------------------------
 
+variable "llm_provider" {
+  description = <<-EOT
+    Which LLM provider the application calls: "anthropic" or "groq".
+
+    Groq is OpenAI-wire-compatible and has a free tier, which is why it is an
+    option here. Setting this alone is not enough — write the matching key into
+    the provider's SSM parameter and set force_offline = "0", or the deployment
+    stays on the deterministic extractive path.
+  EOT
+  type        = string
+  default     = "anthropic"
+
+  validation {
+    condition     = contains(["anthropic", "groq"], var.llm_provider)
+    error_message = "llm_provider must be anthropic or groq."
+  }
+}
+
 variable "force_offline" {
   description = <<-EOT
     1 keeps answers deterministic and extractive, and needs no API key. Set to

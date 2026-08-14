@@ -188,6 +188,23 @@ resource "aws_ssm_parameter" "db_password" {
   tags = { Name = local.name }
 }
 
+resource "aws_ssm_parameter" "groq_api_key" {
+  name        = "/${local.name}/groq/api-key"
+  description = "Populate out of band. Read when llm_provider = groq and force_offline = 0."
+  type        = "SecureString"
+  # Placeholder, same pattern as the Anthropic key below: the parameter must
+  # exist before the task definition can reference it, and the real value is
+  # written with `aws ssm put-parameter` so it never passes through Terraform
+  # and never lands in state.
+  value = "unset"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = { Name = local.name }
+}
+
 resource "aws_ssm_parameter" "anthropic_api_key" {
   name        = "/${local.name}/anthropic/api-key"
   description = "Populate out of band. Only read when AIOPS_FORCE_OFFLINE=0."
