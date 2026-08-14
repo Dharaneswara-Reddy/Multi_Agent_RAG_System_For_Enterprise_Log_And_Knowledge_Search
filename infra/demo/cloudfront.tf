@@ -20,14 +20,30 @@ data "aws_cloudfront_cache_policy" "disabled" {
   name = "Managed-CachingDisabled"
 }
 
+data "aws_cloudfront_cache_policy" "optimized" {
+  name = "Managed-CachingOptimized"
+}
+
+data "aws_cloudfront_origin_request_policy" "cors_s3" {
+  name = "Managed-CORS-S3Origin"
+}
+
 data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
 resource "aws_cloudfront_distribution" "app" {
-  enabled         = true
-  comment         = "${local.name} — Streamlit console"
-  price_class     = "PriceClass_100" # North America + Europe; the cheapest tier
+  enabled = true
+  comment = "${local.name} — Streamlit console"
+
+  # PriceClass_200 adds Asia, South America and the Middle East. PriceClass_100
+  # was the cheaper choice on paper and the wrong one in practice: it covers
+  # North America and Europe only, so a viewer in India was served from
+  # Marseille and every asset made a round trip to another continent. The
+  # difference is per-GB, and at 1 TB free it is $0 at this traffic — the
+  # "cheapest tier" was costing seconds per page load to save nothing.
+  price_class = "PriceClass_200"
+
   http_version    = "http2and3"
   is_ipv6_enabled = true
 
@@ -85,6 +101,42 @@ resource "aws_cloudfront_distribution" "app" {
     # viewer's Host, and the request would arrive at the origin for a hostname
     # it does not answer to.
     origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+  }
+
+  # Static assets, cached at the edge. This is the behaviour that makes the page
+  # load in seconds instead of a minute.
+  #
+  # Streamlit's frontend is dozens of content-hashed chunks — a ~460 KB main
+  # bundle, React, emotion, fonts — and it already serves them with
+  # `cache-control: public, immutable, max-age=31536000`. The default
+  # CachingDisabled behaviour overrode that and sent every single one to the
+  # origin on every page load: dozens of round trips to a 0.5 vCPU task, each
+  # about a second. Nothing here is per-session, and the filenames are hashed,
+  # so cache invalidation is automatic on the next build.
+  ordered_cache_behavior {
+    path_pattern           = "/static/*"
+    target_origin_id       = "app"
+    viewer_protocol_policy = "redirect-to-https"
+
+    allowed_methods = ["GET", "HEAD", "OPTIONS"]
+    cached_methods  = ["GET", "HEAD"]
+    compress        = true
+
+    cache_policy_id          = data.aws_cloudfront_cache_policy.optimized.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.cors_s3.id
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/favicon.png"
+    target_origin_id       = "app"
+    viewer_protocol_policy = "redirect-to-https"
+
+    allowed_methods = ["GET", "HEAD"]
+    cached_methods  = ["GET", "HEAD"]
+    compress        = true
+
+    cache_policy_id          = data.aws_cloudfront_cache_policy.optimized.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.cors_s3.id
   }
 
   restrictions {
