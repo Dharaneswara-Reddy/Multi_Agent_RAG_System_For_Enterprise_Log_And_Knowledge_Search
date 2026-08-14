@@ -62,9 +62,25 @@ variable "desired_count" {
 }
 
 variable "image_tag" {
-  description = "Image tag to run. The ECR repository starts empty — see README.md."
+  description = <<-EOT
+    Image tag to run. This is the tag currently deployed, and it is pinned here
+    rather than left at a placeholder for a reason worth recording.
+
+    The default used to be "bootstrap", a tag that has never existed in ECR.
+    The real tag was supplied as `-var` at apply time, and command-line
+    variables are not persisted in state — so any later `terraform plan` that
+    omitted the flag silently rewrote the task definition back to a nonexistent
+    image. Because aws_ecs_task_definition replaces rather than updates, that
+    plan deregistered the running revision and registered one that cannot pull.
+    The service kept serving until its single task next restarted, and then
+    could not recover, since ECS will not launch from an INACTIVE definition.
+
+    A default that is always wrong is worse than no default. Update this when a
+    new image is promoted; the CI workflow deploys by registering its own
+    revision, so this value is what `terraform apply` reconciles back to.
+  EOT
   type        = string
-  default     = "bootstrap"
+  default     = "sha-73eca9a59a46-groq"
 }
 
 variable "container_port" {
@@ -158,9 +174,13 @@ variable "llm_provider" {
     option here. Setting this alone is not enough — write the matching key into
     the provider's SSM parameter and set force_offline = "0", or the deployment
     stays on the deterministic extractive path.
+
+    This demo runs on Groq: the key is populated in /aiops-demo/groq/api-key and
+    force_offline is "0". The application default remains "anthropic" — this is
+    a property of this deployment, not of the codebase.
   EOT
   type        = string
-  default     = "anthropic"
+  default     = "groq"
 
   validation {
     condition     = contains(["anthropic", "groq"], var.llm_provider)
@@ -173,9 +193,13 @@ variable "force_offline" {
     1 keeps answers deterministic and extractive, and needs no API key. Set to
     0 only after putting a key in the Secrets parameter — otherwise every
     synthesis call fails at request time rather than at deploy time.
+
+    Now "0": the Groq key is populated, so synthesis is live. Retrieval is
+    unchanged either way — this switches only how the final answer is written,
+    from extracted spans to a generated response grounded in them.
   EOT
   type        = string
-  default     = "1"
+  default     = "0"
 }
 
 variable "docs_prefix" {
