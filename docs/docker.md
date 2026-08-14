@@ -82,7 +82,9 @@ SQLite is faster and needs no build.
 |---|---|---|
 | `AIOPS_DB_URL` | — | Postgres DSN. Unset means SQLite. |
 | `AIOPS_DB_HOST` / `_USER` / `_PASSWORD` / `_NAME` / `_PORT` | — | Assembled into `AIOPS_DB_URL` by the entrypoint |
+| `AIOPS_REQUIRE_POSTGRES` | `0` | **Set to `1` in every cloud deployment.** Turns a missing `AIOPS_DB_URL` into a startup failure instead of a container-local SQLite file |
 | `AIOPS_INDEX_URI` | — | `s3://bucket/prefix/` for runtime index fetch |
+| `AIOPS_DOCS_URI` | — | `s3://bucket/docs/` — the corpus is synced before ingestion, making S3 the source of truth for knowledge |
 | `AIOPS_FORCE_OFFLINE` | — | `1` = deterministic extractive answers, no API key |
 | `ANTHROPIC_API_KEY` | — | Enables synthesis |
 | `AIOPS_API_PORT` / `AIOPS_UI_PORT` | `8000` / `8501` | |

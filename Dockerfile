@@ -99,6 +99,19 @@ RUN groupadd --system --gid 10001 aiops \
 
 
 # ---------------------------------------------------------------------------
+# uv — just a binary to copy out of
+# ---------------------------------------------------------------------------
+# Declared as a stage so `COPY --from=uv` below resolves to *this* rather than
+# to a Docker Hub image called "uv". Without it the build fails with
+# "pull access denied, repository does not exist" pointing at
+# docker.io/library/uv, which names neither the real problem nor this file.
+#
+# The global ARG UV_VERSION above is in scope here precisely because it is
+# declared before the first FROM.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+
+# ---------------------------------------------------------------------------
 # builder — dependencies only, resolved from uv.lock
 # ---------------------------------------------------------------------------
 FROM base AS builder

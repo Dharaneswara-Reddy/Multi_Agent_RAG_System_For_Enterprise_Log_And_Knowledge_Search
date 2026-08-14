@@ -172,6 +172,14 @@ start_ui() {
 
 # --------------------------------------------------------------------------
 
+# Unconditionally, before dispatch. This was previously defined and never
+# called, which meant AIOPS_DB_URL was never assembled from the discrete parts
+# the task definition supplies — and with AIOPS_REQUIRE_POSTGRES set, the first
+# request to touch persistence would have failed at runtime rather than at
+# start. It runs for every command, including the verbatim branch, because
+# `docker run <image> python -c ...` needs a database as much as the server does.
+assemble_db_url
+
 case "${COMMAND}" in
     api)
         wait_for_postgres
@@ -185,6 +193,10 @@ case "${COMMAND}" in
         wait_for_postgres
         build_index_if_asked
         warm_index
+        # Also here, not just under `api`. The demo deployment runs the console
+        # alone, so without this the schema is never created and the first
+        # question fails on a missing table.
+        prepare_schema
         log "starting Streamlit on :${AIOPS_UI_PORT:-8501}"
         start_ui
         ;;
