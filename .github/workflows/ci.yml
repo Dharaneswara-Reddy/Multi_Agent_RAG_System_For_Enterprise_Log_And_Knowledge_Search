@@ -16,6 +16,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Declared rather than inherited. With no `permissions:` block the GITHUB_TOKEN
+# takes the repository default, which on older repositories is read-write across
+# every scope. This workflow only reads the checkout — but it also hands the
+# token to a third-party action (gitleaks), and a compromised release of that
+# action would inherit whatever the default happened to be. Fork PRs get a
+# read-only token regardless; this closes the push and same-repo PR paths.
+permissions:
+  contents: read
+
 env:
   # Force the deterministic extractive path so CI never needs a credential and
   # never spends money. Retrieval, safety and the end-to-end answer metrics are
