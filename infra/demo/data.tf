@@ -188,19 +188,49 @@ resource "aws_ssm_parameter" "db_password" {
   tags = { Name = local.name }
 }
 
+# --- vendor API keys: write-only, so the value never reaches state ----------
+#
+# Both parameters below exist only so the task definition has an ARN to
+# reference; the real key is written out of band with `aws ssm put-parameter`.
+# What changed here is *how the placeholder is declared*, and it is the
+# difference between "the secret is encrypted in state" and "the secret is not
+# in state".
+#
+# The previous form was `value = "unset"` plus `ignore_changes = [value]`. That
+# stops Terraform *overwriting* an out-of-band value, but it does not stop
+# Terraform *reading* one: `value` is an `optional, computed, sensitive`
+# attribute, so a refresh pulls whatever SSM currently holds into state. Once a
+# real key had been written, the next `plan` would have captured it — and state
+# is versioned, so it would persist in the bucket's object history.
+#
+# `value_wo` is a Terraform write-only argument: it is sent to the API and
+# discarded rather than persisted, and only its companion `value_wo_version`
+# is stored. Critically, the provider also nulls the computed attribute on read
+# when write-only is in use (internal/service/ssm/parameter.go):
+#
+#     if hasWriteOnly {
+#         d.Set("has_value_wo", true)
+#         d.Set(names.AttrValue, nil)
+#     }
+#
+# so there is no refresh path that can recover the value into state.
+#
+# `ignore_changes` is deliberately gone rather than carried over. It existed to
+# defend the out-of-band value against a diff on `value`; with write-only there
+# is no such diff, because Terraform re-sends the placeholder only when
+# `value_wo_version` changes. Keeping it would imply a protection that is no
+# longer doing anything, which is worse than not having it.
+#
+# Consequence worth knowing: to *deliberately* reset a key to the placeholder,
+# bump `value_wo_version`. Nothing else will overwrite an operator's value.
+
 resource "aws_ssm_parameter" "groq_api_key" {
   name        = "/${local.name}/groq/api-key"
   description = "Populate out of band. Read when llm_provider = groq and force_offline = 0."
   type        = "SecureString"
-  # Placeholder, same pattern as the Anthropic key below: the parameter must
-  # exist before the task definition can reference it, and the real value is
-  # written with `aws ssm put-parameter` so it never passes through Terraform
-  # and never lands in state.
-  value = "unset"
 
-  lifecycle {
-    ignore_changes = [value]
-  }
+  value_wo         = "unset"
+  value_wo_version = 1
 
   tags = { Name = local.name }
 }
@@ -209,14 +239,9 @@ resource "aws_ssm_parameter" "anthropic_api_key" {
   name        = "/${local.name}/anthropic/api-key"
   description = "Populate out of band. Only read when AIOPS_FORCE_OFFLINE=0."
   type        = "SecureString"
-  # A placeholder, because the parameter must exist before the task definition
-  # can reference it. The real value is written with `aws ssm put-parameter`, so
-  # it never passes through Terraform and never lands in state.
-  value = "unset"
 
-  lifecycle {
-    ignore_changes = [value]
-  }
+  value_wo         = "unset"
+  value_wo_version = 1
 
   tags = { Name = local.name }
 }
