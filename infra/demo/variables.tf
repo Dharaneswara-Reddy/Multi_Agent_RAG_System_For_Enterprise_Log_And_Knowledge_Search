@@ -80,7 +80,7 @@ variable "image_tag" {
     revision, so this value is what `terraform apply` reconciles back to.
   EOT
   type        = string
-  default     = "sha-73eca9a59a46-groq"
+  default     = "sha-5d0dabb7a7de"
 }
 
 variable "container_port" {
