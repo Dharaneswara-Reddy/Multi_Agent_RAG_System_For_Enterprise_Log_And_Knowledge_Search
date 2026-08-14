@@ -67,8 +67,9 @@ def health() -> dict[str, Any]:
         "uptime_s": round(time.time() - _STARTED, 1),
         "offline_mode": get_copilot().offline,
         "index_chunks": len(index),
-        "reasoning_model": settings.reasoning_model,
-        "cheap_model": settings.cheap_model,
+        "llm_provider": settings.llm_provider,
+        "reasoning_model": settings.active_reasoning_model,
+        "cheap_model": settings.active_cheap_model,
     }
 
 

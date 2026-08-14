@@ -268,6 +268,25 @@ class Settings(BaseSettings):
     otlp_endpoint: str | None = None  # e.g. http://localhost:4318/v1/traces
     service_name: str = "aiops-copilot"
 
+    # --- which models are actually in use -----------------------------------
+    #
+    # `reasoning_model` and `cheap_model` are the Anthropic IDs; the Groq client
+    # reads `groq_*` instead. Anything reporting to a human has to resolve the
+    # pair through the active provider, or it reports the model it would have
+    # called rather than the one it did. The demo ran on Groq while the UI
+    # displayed "claude-opus-5", which is the kind of caption a reader takes at
+    # face value — a deployment claiming a model it never invoked.
+
+    @property
+    def active_reasoning_model(self) -> str:
+        """Synthesis model for the provider actually selected."""
+        return self.groq_reasoning_model if self.llm_provider == "groq" else self.reasoning_model
+
+    @property
+    def active_cheap_model(self) -> str:
+        """Routing/extraction model for the provider actually selected."""
+        return self.groq_cheap_model if self.llm_provider == "groq" else self.cheap_model
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.docs_dir, self.logs_dir, self.eval_dir, self.index_dir):
             d.mkdir(parents=True, exist_ok=True)
