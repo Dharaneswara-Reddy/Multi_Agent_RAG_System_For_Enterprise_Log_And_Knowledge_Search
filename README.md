@@ -595,50 +595,60 @@ them is the point rather than an embarrassment.
 
 | | **Demo** — [infra/demo/](infra/demo/) | **Production** — [infra/](infra/) |
 |---|---|---|
-| Compute | 1 × EC2 t4g.medium, ECS on EC2 | ECS Fargate ARM64, 2–6 tasks |
-| **Availability** | **single instance, single AZ — not HA** | 2+ tasks, 2 AZs, circuit breaker |
-| **Autoscaling** | **none** (ASG min=max=1 replaces, does not scale) | target tracking on ECS CPU |
-| Load balancing | **none** — CloudFront is a CDN with one origin | ALB, path routing, 2 target groups |
+| Compute | 1 × ECS Fargate task, ARM64, 0.5 vCPU / 2 GB | ECS Fargate ARM64, 2–6 tasks |
+| **Availability** | **single task, single AZ — not HA** | 2+ tasks, 2 AZs, circuit breaker |
+| **Autoscaling** | **none** (`desired_count = 1`, no target tracking) | target tracking on ECS CPU |
+| Load balancing | ALB, 1 listener, 1 target group — **one task behind it** | ALB, path routing, 2 target groups |
 | Database | RDS PostgreSQL Single-AZ | RDS PostgreSQL Multi-AZ |
-| Networking | public subnet, **no NAT**; DB private, no route out | public/private tiers, NAT or endpoints |
+| Networking | task in a public subnet with a public IP, **no NAT**; DB private, no route out | public/private tiers, NAT or endpoints |
 | Observability | 1 log group, 3 optional alarms | 4 alarms, SNS, Container Insights |
-| **Cost** | **~$44/month** | **~$76–131/month** |
+| **Cost** | **~$52/month** | **~$76–131/month** |
 
 The demo is cheaper because capabilities were **removed**, not because
-something was optimised: no ALB (−$16.43), no NAT gateway (−$32.85), one task
-instead of two (−$14.42), Single-AZ (−$16.28), Parameter Store instead of
-Secrets Manager (−$0.80).
+something was optimised: no NAT gateway (−$32.85), one task instead of two
+(−$14.42), Single-AZ (−$16.28), Parameter Store instead of Secrets Manager
+(−$0.80), no Container Insights, no Performance Insights, 7-day log retention.
 
-**The demo deployment is not highly available, does not autoscale, and is not
-load balanced.** The production root genuinely is all three, and it is real
-implementable Terraform — it validates, its provider is pinned and locked — but
-it is not what runs. Both facts are stated because a claim that cannot survive
-someone reading the repository is worse than no claim.
+**The demo deployment is not highly available and does not autoscale.** It has a
+load balancer, but with exactly one task behind it there is nothing to balance
+across — the ALB is there to terminate CloudFront's origin requests and run
+health checks, not to distribute load. The production root genuinely is highly
+available and autoscaled, and it is real implementable Terraform — it validates,
+its provider is pinned and locked — but it is not what runs. Both facts are
+stated because a claim that cannot survive someone reading the repository is
+worse than no claim.
 
-> **Status: validated, never applied.** `terraform validate` and `fmt` pass on
-> both roots against Terraform 1.14.3 and aws 6.59.0; the demo graph builds with
-> no cycles. Only the state backend in [infra/bootstrap/](infra/bootstrap/) has
-> actually been created. No `plan` has run against either application root.
+> **Status: the demo is deployed and serving.** [infra/demo/](infra/demo/) is
+> applied in `us-east-1` and live at
+> <https://d269rj5uf8ejau.cloudfront.net>. The production root in
+> [infra/](infra/) is **validated but never applied** — `terraform validate` and
+> `fmt` pass against Terraform 1.14.3 and aws 6.59.0, the provider is pinned and
+> locked, and no `plan` has ever run against it.
 
 | Piece | Where | Note |
 |---|---|---|
 | Image | [Dockerfile](Dockerfile) | multi-stage; **models baked in** |
 | Entrypoint | [docker/entrypoint.sh](docker/entrypoint.sh) | preflight, then `exec` so SIGTERM lands |
 | Local stack | [docker-compose.yml](docker-compose.yml) | API + UI + Postgres |
-| **Demo infra** | [infra/demo/](infra/demo/) | EC2, ECS, RDS, S3, CloudFront |
+| **Demo infra** | [infra/demo/](infra/demo/) | ECS Fargate, ALB, RDS, S3, CloudFront |
 | **Production infra** | [infra/](infra/) | VPC, ECR, ECS, ALB, RDS, S3, IAM, alarms |
 | Pipelines | [.github/workflows/](.github/workflows/) | quality gate, then OIDC deploy |
 | Research | [docs/aws-deployment-research.md](docs/aws-deployment-research.md) | why these services |
 
-### Sizing the demo instance, by measurement
+### Sizing the demo task, by measurement
 
-`t4g.small` was the intuitive choice and it is wrong. The resident set of the
-application alone plateaus at **2.11 GB** after four queries and stays flat
-through eight — the ONNX Runtime arena reaching steady state, not a leak, and
-insensitive to thread count. With the ECS agent, the container runtime and the
-OS that is ~2.66 GB, so 2 GB does not fit and `t4g.medium` is required at
-$12.27/month more. Swap was rejected rather than used to hide the gap: paging
-ONNX inference is pathological.
+A 2 GB task was not the intuitive choice — it is what one measured setting made
+possible. The resident set of the application plateaus at **2.11 GB** after four
+queries and stays flat through eight: the ONNX Runtime CPU arena reaching steady
+state, not a leak, and insensitive to thread count. That does not fit a 2 GB
+Fargate task.
+
+Disabling the arena ([src/aiops/onnx_tuning.py](src/aiops/onnx_tuning.py)) drops
+peak RSS to **1.56 GB**, 29.6% lower, for 24.5% more mean query latency
+(6.73s → 8.38s) and **bit-identical retrieval** — identical ordering and scores
+across 240 reranked candidates. At 10–20 questions a month, latency is the
+cheapest thing available to spend. Swap was rejected rather than used to hide the
+gap: paging ONNX inference is pathological.
 
 ### What had to change to make it cloud-native
 
