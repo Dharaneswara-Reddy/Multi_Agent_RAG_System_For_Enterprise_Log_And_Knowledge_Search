@@ -1,0 +1,39 @@
+@startuml retrieval
+!include style.puml
+skinparam ranksep 28
+
+rectangle "**Rewritten query**" as Q0 $accentBg
+
+rectangle "**1 · Hybrid search**\n<size:11><color:$dim>dense vectors + BM25 keywords,</color></size>\n<size:11><color:$dim>weighted blend over 1,566 chunks</color></size>" as S1
+rectangle "**2 · Cross-encoder rerank**\n<size:11><color:$dim>an ONNX model scores each</color></size>\n<size:11><color:$dim>query–candidate pair</color></size>" as S2
+rectangle "**3 · Multi-hop**\n<size:11><color:$dim>follows real cross-reference</color></size>\n<size:11><color:$dim>links between documents</color></size>" as S3
+rectangle "**4 · Context assembly**\n<size:11><color:$dim>per-document cap, trace</color></size>\n<size:11><color:$dim>expansion, character budget</color></size>" as S4
+
+rectangle "**Context**\n<size:11><color:$dim>handed to the synthesizer</color></size>" as OUT $goodBg
+
+Q0 -down-> S1
+S1 -down-> S2 : <color:$good>**+0.063 recall**</color>
+S2 -down-> S3 : <color:$good>**+0.031 MRR**</color>
+S3 -down-> S4 : <color:$good>**hit rate → 1.000**</color>
+S4 -down-> OUT
+
+note right of S1
+  The biggest single win, and the
+  cheapest. Exact tokens like
+  PAY-5021 are what a dense
+  embedding blurs away.
+end note
+
+note right of S2
+  Buys ranking, not recall — and
+  costs 50x the latency. That is
+  the trade, measured rather
+  than assumed.
+end note
+
+note right of S3
+  Closes the last gap: every golden
+  question now has its evidence
+  somewhere in the context.
+end note
+@enduml

@@ -1,0 +1,33 @@
+@startuml deployment
+!include style.puml
+skinparam ranksep 24
+skinparam linetype ortho
+
+rectangle "**Internet**\n<size:11><color:$dim>HTTPS</color></size>" as NET $accentBg
+rectangle "**CloudFront**\n<size:11><color:$dim>TLS · caching · WebSocket passthrough</color></size>" as CF
+
+rectangle "  **VPC**  10.20.0.0/16  " as VPC {
+  rectangle "**Public subnets**  ·  2 AZ" as PUB {
+    rectangle "**Application Load Balancer**\n<size:11><color:$dim>health checks; its security group admits CloudFront only</color></size>" as ALB
+    rectangle "**ECS Fargate task**  ·  ARM64  ·  0.5 vCPU / 2 GB\n<size:11><color:$dim>Streamlit console + RAG pipeline, models baked into the image</color></size>" as TASK $accentBg
+  }
+  rectangle "**Private subnets**  ·  2 AZ  ·  no route to the internet" as PRIV {
+    rectangle "**RDS PostgreSQL**  ·  db.t4g.micro  ·  Single-AZ\n<size:11><color:$dim>audit trail · escalation queue · error-code catalog</color></size>" as DB
+  }
+}
+
+rectangle "**S3**\n<size:11><color:$dim>corpus + index artefacts,</color></size>\n<size:11><color:$dim>over a free gateway endpoint</color></size>" as S3B
+rectangle "**SSM Parameter Store**\n<size:11><color:$dim>API keys and the database</color></size>\n<size:11><color:$dim>password, read at start-up</color></size>" as SSM
+
+NET  -down->  CF
+CF   -down->  ALB
+ALB  -down->  TASK
+TASK -down->  DB
+TASK -right-> S3B
+TASK -left->  SSM
+
+note bottom of DB
+  One task, one AZ, no failover.
+  A cost decision, stated as one.
+end note
+@enduml

@@ -1,0 +1,46 @@
+@startuml architecture
+!include style.puml
+skinparam ranksep 26
+
+rectangle "  **Question**  \n<size:11><color:$dim>“why did checkout start failing at 14:20?”</color></size>" as Q $accentBg
+
+rectangle "**Triage**  ·  cheap model\n<size:11><color:$dim>route  ·  extract error codes  ·  rewrite the search query</color></size>" as T
+
+rectangle "**Knowledge agent**\n<size:11><color:$dim>runbooks · ADRs · post-mortems</color></size>" as K
+rectangle "**Log analyst**\n<size:11><color:$dim>correlate by service + trace id</color></size>" as L
+
+rectangle "**Retrieval pipeline**\n<size:11><color:$dim>hybrid (dense + BM25)  →  cross-encoder rerank</color></size>\n<size:11><color:$dim>→  cross-reference hops  →  context assembly</color></size>" as R
+
+rectangle "**Error-code catalog**\n<size:11><color:$dim>SQL lookup — no model involved</color></size>" as C
+
+rectangle "**Synthesizer**  ·  reasoning model\n<size:11><color:$dim>drafts the answer from the assembled context</color></size>" as S
+
+rectangle "**Guardrail gate**\n<size:11><color:$dim>citations  ·  claim verification  ·  confidence</color></size>" as G $accentBg
+
+rectangle "**Answer**\n<size:11><color:$dim>with citations</color></size>" as A $goodBg
+rectangle "**Escalate**\n<size:11><color:$dim>human queue</color></size>" as E $warnBg
+rectangle "**Block**\n<size:11><color:$dim>unsafe or fabricated</color></size>" as B $badBg
+
+Q   -down->     T
+T   -down->     K : knowledge
+T   -down->     L : logs
+K   -down->     R
+L   -down->     R
+R   -down->     C
+C   -down->     S
+S   -down->     G
+G   -down->     A : confident
+G   -down->     E : low confidence
+G   -down->     B : blocked
+G   -left[$warn]->  T : <color:$warn>retry once, broadened</color>
+
+note right of T
+  Routes to one agent or both.
+  Never writes the answer itself.
+end note
+
+note right of G
+  The only cycle in the graph,
+  capped at a single retry.
+end note
+@enduml

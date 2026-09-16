@@ -1,0 +1,73 @@
+' Shared look for every diagram in this directory.
+' Rendered twice: default (light) and with -DDARK=1 (dark), so the README can
+' serve whichever matches the reader's GitHub theme.
+
+!if (%variable_exists("DARK"))
+  !$bg      = "#0F1518"
+  !$card    = "#1B2327"
+  !$card2   = "#243034"
+  !$ink     = "#EAF0EE"
+  !$dim     = "#9FB0AE"
+  !$line    = "#44565A"
+  !$accent  = "#3FC3C4"
+  !$accentBg= "#17383A"
+  !$good    = "#6FCB93"
+  !$goodBg  = "#17301F"
+  !$warn    = "#E3B45C"
+  !$warnBg  = "#33290F"
+  !$bad     = "#E38F86"
+  !$badBg   = "#3A211D"
+!else
+  !$bg      = "#FFFFFF"
+  !$card    = "#F3F7F6"
+  !$card2   = "#E7EFED"
+  !$ink     = "#16211F"
+  !$dim     = "#5B6A6C"
+  !$line    = "#B9CBC7"
+  !$accent  = "#0E7C82"
+  !$accentBg= "#DCEEEE"
+  !$good    = "#2E7D50"
+  !$goodBg  = "#E0F0E6"
+  !$warn    = "#8A5E06"
+  !$warnBg  = "#FBF0DA"
+  !$bad     = "#9C3B34"
+  !$badBg   = "#F7E3E0"
+!endif
+
+skinparam backgroundColor       $bg
+skinparam defaultFontName       "DejaVu Sans"
+skinparam defaultFontSize       13
+skinparam defaultFontColor      $ink
+skinparam shadowing             false
+skinparam roundCorner           14
+skinparam padding               4
+skinparam nodesep               18
+skinparam linetype              ortho
+
+skinparam ArrowColor            $line
+skinparam ArrowFontColor        $dim
+skinparam ArrowFontSize         11
+
+skinparam rectangle {
+  BackgroundColor  $card
+  BorderColor      $line
+  FontColor        $ink
+  BorderThickness  1.2
+}
+skinparam note {
+  BackgroundColor  $card2
+  BorderColor      $line
+  FontColor        $dim
+  FontSize         11
+}
+skinparam activity {
+  BackgroundColor  $card
+  BorderColor      $line
+  FontColor        $ink
+  DiamondBackgroundColor $card2
+  DiamondBorderColor     $line
+  DiamondFontColor       $ink
+  BarColor         $accent
+}
+skinparam activityStartColor $accent
+skinparam activityEndColor   $accent
