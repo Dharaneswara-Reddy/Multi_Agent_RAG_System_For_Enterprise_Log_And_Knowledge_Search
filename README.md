@@ -1,42 +1,77 @@
-# AI Ops Copilot
+<div align="center">
 
-A multi-agent RAG system that answers SRE questions over a mixed corpus of
-**runbooks, ADRs, post-mortems, service docs, and platform logs** — with
-calibrated confidence, deterministic guardrails, OpenTelemetry tracing, a human
-escalation queue, and an evaluation harness that gates CI.
+<h1>AI&nbsp;Ops&nbsp;Copilot</h1>
 
-Built as a portfolio project for the Cognizant Ace Frontier Engineer program.
+<p><b>Ask an on-call question in plain English.<br>
+Get an answer with citations — or an honest “not sure”, handed to a human.</b></p>
 
-```
-                 ┌─────────── triage (supervisor, cheap model) ───────────┐
-   question ────▶│  route · extract error codes · rewrite search query    │◀─┐
-                 └───┬──────────────────┬───────────────────┬─────────────┘  │
-                     │                  │                   │                │
-              knowledge agent      log analyst          both (hybrid)        │
-              (docs retrieval)   (log correlation)                           │
-                     └──────────────────┴───────────────────┘                │
-                                        │                                    │
-              ┌─────────────────────────▼─────────────────────────┐          │
-              │  retrieval pipeline                               │          │
-              │  hybrid (dense + BM25) → cross-encoder rerank      │          │
-              │  → cross-reference hops → context assembly         │          │
-              └─────────────────────────┬─────────────────────────┘          │
-                                        │                                    │
-                          error-code catalog  (SQL tool, no model)           │
-                                        │                                    │
-                              synthesizer (reasoning model)                  │
-                                        │                                    │
-              ┌─────────────────────────▼─────────────────────────┐          │
-              │  guardrail gate                                   │          │
-              │  citations · claim verification · confidence      │──────────┘
-              └─────────────────────────┬─────────────────────────┘   retry once,
-                                        │                             broadened
-                            answer | escalate | block
-```
+<p>
+  <a href="https://d269rj5uf8ejau.cloudfront.net"><img alt="Live demo" src="https://img.shields.io/badge/live_demo-online-0E7C82?style=for-the-badge&logo=amazonaws&logoColor=white"></a>
+  <img alt="Python 3.11" src="https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="262 tests passing" src="https://img.shields.io/badge/tests-262_passing-2E7D50?style=for-the-badge">
+  <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-5B6A6C?style=for-the-badge">
+</p>
+
+<p>
+  <a href="#what-it-does"><b>What it does</b></a>&nbsp; ·&nbsp;
+  <a href="#how-it-works"><b>How it works</b></a>&nbsp; ·&nbsp;
+  <a href="#the-retrieval-pipeline-and-what-each-stage-is-worth"><b>Retrieval</b></a>&nbsp; ·&nbsp;
+  <a href="#evaluation"><b>Evaluation</b></a>&nbsp; ·&nbsp;
+  <a href="#deployment"><b>Deployment</b></a>&nbsp; ·&nbsp;
+  <a href="#what-this-project-does-not-do"><b>Limitations</b></a>
+</p>
+
+</div>
 
 ---
 
-## Quick start
+## What it does
+
+It is 14:20 and checkout is failing. The answer to *why* already exists
+somewhere — in a runbook, in a two-year-old post-mortem, in an architecture
+decision nobody remembers making, and in a few thousand log lines. Finding it
+costs an engineer twenty minutes of grep and memory, during an incident, which
+is the worst possible time to spend twenty minutes.
+
+**This system answers that question in one place, and shows its sources.**
+
+|  | |
+|---|---|
+| 🔎 **It reads logs and documentation together.** | A log line says `PAY-5021`. A runbook explains what that means. A post-mortem says what happened last time. The answer needs all three, so retrieval spans all three. |
+| 📎 **Every claim carries a citation — and the citations are checked.** | The system re-reads its own answer against the retrieved text and verifies the specific facts in it: error codes, thresholds, flag names. A sentence that cites a real document but invents a number is caught. |
+| 🚦 **It knows when it does not know.** | Confidence is computed from retrieval strength, corroboration and grounding — never asked of the model. Below the line, the answer is not served: it goes to a human review queue instead. |
+
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/dark/architecture.png">
+  <img alt="How one question flows through triage, retrieval, synthesis and the guardrail gate" src="docs/diagrams/architecture.png" width="780">
+</picture>
+</div>
+
+<div align="center"><sub>One question, end to end. The only loop in the graph is the single retry on the left.</sub></div>
+
+---
+
+## Numbers at a glance
+
+| | | |
+|---|---|---|
+| **Corpus** | 220 documents · ~44,000 words · 18,000 real log lines | 1,566 indexed chunks |
+| **Retrieval quality** | recall@k **0.979** · MRR **0.851** · hit rate **1.000** | 95 golden cases |
+| **Safety** | injection blocked **100%** · out-of-scope escalated **100%** | deterministic, no model |
+| **Tests** | **262** passing | CI fails the build on any regression |
+| **Running cost** | **~$52/month** on AWS | one Fargate task, one RDS instance |
+
+---
+
+## Try it
+
+**Live, no install:** <https://d269rj5uf8ejau.cloudfront.net> — the console runs
+the full pipeline against the same corpus described below. Ask it *"what causes
+PAY-5021 and how do I fix it?"*, then open the **Retrieval** tab to see exactly
+which chunks it used and how they were scored.
+
+**Locally**, in four commands:
 
 ```bash
 uv venv --python 3.11 --python-preference only-managed
@@ -46,7 +81,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 233 tests
+uv run pytest -q                                   # 262 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
@@ -57,6 +92,34 @@ number. Set the key to enable synthesis and LLM-judge grading.
 
 > The environment needs a Python built **with** `sqlite3`. Some pyenv builds
 > omit it; `--python-preference only-managed` avoids that.
+
+---
+
+## How it works
+
+Six sentences, in the order the picture above runs:
+
+1. **Triage routes; it never answers.** A cheap model decides whether the
+   question needs documentation, logs, or both, pulls out any error codes, and
+   rewrites the search query. That split — cheap model for routing, reasoning
+   model for synthesis — is where most of the cost/quality trade-off lives.
+2. **Two agents, one plain lookup.** The knowledge agent and the log analyst are
+   agents because they reason about what to fetch. Error-code mapping is a SQL
+   join, so it is a tool, not an agent: sending a deterministic lookup through a
+   model buys latency and hallucination risk for nothing.
+3. **Retrieval is a pipeline, not a call.** Hybrid search, then re-ranking, then
+   one hop along real cross-references between documents, then assembly into a
+   character budget. [Each stage earns its place below](#the-retrieval-pipeline-and-what-each-stage-is-worth).
+4. **Guardrails run inside the graph, not around it.** The gate sees the same
+   retrieved text the agents saw, so it can check whether the answer's specific
+   claims actually appear there — not merely whether it cited something.
+5. **Confidence is computed, never self-reported.** Retrieval strength (45%),
+   corroboration across independent sources (25%) and citation grounding (30%),
+   multiplied by a claim-support floor.
+6. **One retry, and only when retrying could help.** A weak answer is retried
+   once with a broadened query if the cause looks recoverable. A *blocked*
+   answer is never retried — wearing a guardrail down by repetition is exactly
+   how guardrails fail — and that rule is enforced by a test.
 
 ---
 
@@ -304,6 +367,14 @@ Against the same 95 cases before this work: recall 0.949 → **0.979**, MRR
 
 ### The retrieval pipeline, and what each stage is worth
 
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/dark/retrieval.png">
+  <img alt="Retrieval pipeline: hybrid search, cross-encoder rerank, multi-hop, context assembly" src="docs/diagrams/retrieval.png" width="700">
+</picture>
+</div>
+
+
 ```
 query -> hybrid search (dense + BM25) -> cross-encoder rerank -> reference hops -> context
 ```
@@ -355,7 +426,9 @@ near-duplicate lists. Real query diversity needs a model that can produce
 measured in CI without a key. The code is kept because that is an untested
 hypothesis; the default is off because the tested path failed.
 
-### Robustness to how people actually ask
+<details>
+<summary><b>Robustness: what happens when people ask conversationally (and the label bug it exposed)</b></summary>
+<br>
 
 The golden set is written in the corpus's own vocabulary, because I wrote both.
 `scripts/eval_paraphrase.py` asks the same 20 incidents the way someone under
@@ -398,7 +471,11 @@ books don't add up". That is a vocabulary gap no amount of reranking fixes.
 0.929 — the right log chunk is found and ranked below its near-identical
 neighbours, the one place reranking has not helped much.
 
-### Adaptive retrieval: measured, and not built
+</details>
+
+<details>
+<summary><b>Adaptive retrieval — measured, and deliberately not built</b></summary>
+<br>
 
 The obvious next move is to let the query pick the retrieval plan — BM25-heavy
 for exact error codes, dense-heavy for vague symptoms. `scripts/sweep_adaptive.py`
@@ -432,7 +509,11 @@ documents surface, so the denominator grows and precision falls even where
 recall does not. It fell from 0.414 to 0.238 for that reason, not because
 ranking got worse — MRR is essentially flat (0.836 → 0.830).
 
-### Scaling the corpus 12× — what actually changed
+</details>
+
+<details>
+<summary><b>Scaling the corpus 12× — what actually changed</b></summary>
+<br>
 
 The corpus deliberately grew from 18 to 219 documents to test whether the
 original numbers were measuring retrieval quality or just a corpus too small to
@@ -451,7 +532,11 @@ at all. Retuning on the larger corpus recovers recall to 0.949 across the full
 95-case set, but the honest statement is that the first number flattered the
 system.
 
-### The sweep, re-run at scale
+</details>
+
+<details>
+<summary><b>The parameter sweep, re-run at scale</b></summary>
+<br>
 
 `scripts/evaluate.py --sweep` rebuilds the index at three chunk sizes and scores
 five dense/BM25 blends — 15 configurations. **The optimum moved when the corpus
@@ -513,6 +598,17 @@ protects nothing.
 
 Parameter sweeps live in `scripts/evaluate.py --sweep` (chunk size × dense/BM25
 blend), so retrieval tuning is an experiment with a record rather than a guess.
+
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/dark/cicd.png">
+  <img alt="CI pipeline: tests, then an AI quality gate, then build and deploy" src="docs/diagrams/cicd.png" width="640">
+</picture>
+</div>
+
+<div align="center"><sub>A retrieval or safety regression fails the build like a broken test would.</sub></div>
+
+</details>
 
 ---
 
@@ -590,6 +686,16 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 
 ## Deployment
 
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/dark/deployment.png">
+  <img alt="AWS deployment: CloudFront, ALB, one Fargate task, RDS PostgreSQL in private subnets" src="docs/diagrams/deployment.png" width="820">
+</picture>
+</div>
+
+<div align="center"><sub>What is actually running at
+<a href="https://d269rj5uf8ejau.cloudfront.net">d269rj5uf8ejau.cloudfront.net</a>, drawn from the applied Terraform.</sub></div>
+
 There are **two** architectures in this repository, and the difference between
 them is the point rather than an embarrassment.
 
@@ -635,7 +741,9 @@ worse than no claim.
 | Pipelines | [.github/workflows/](.github/workflows/) | quality gate, then OIDC deploy |
 | Research | [docs/aws-deployment-research.md](docs/aws-deployment-research.md) | why these services |
 
-### Sizing the demo task, by measurement
+<details>
+<summary><b>Sizing the demo task, by measurement</b></summary>
+<br>
 
 A 2 GB task was not the intuitive choice — it is what one measured setting made
 possible. The resident set of the application plateaus at **2.11 GB** after four
@@ -650,7 +758,11 @@ across 240 reranked candidates. At 10–20 questions a month, latency is the
 cheapest thing available to spend. Swap was rejected rather than used to hide the
 gap: paging ONNX inference is pathological.
 
-### What had to change to make it cloud-native
+</details>
+
+<details>
+<summary><b>What had to change to make it cloud-native</b></summary>
+<br>
 
 **SQLite could not survive multiple tasks.** A file-backed database in a task's
 writable layer is private to that task and gone on redeploy — two tasks would
@@ -687,7 +799,11 @@ embedding pass are startup costs, and a task paying them fails its ALB health
 check before serving anything. Both move into the image build, paid once per
 release instead of once per task.
 
-### The cost decision worth knowing
+</details>
+
+<details>
+<summary><b>The cost decision worth knowing (NAT is a third of the bill)</b></summary>
+<br>
 
 At low traffic the stack is **~$105/month**, and **NAT is a third of it**. This
 workload's only outbound need is `api.anthropic.com`, so `nat_gateway_mode` is a
@@ -695,6 +811,8 @@ first-class variable: `per_az` (prod default), `single`, or `none` — the last
 viable with `force_offline = true`, which removes ~$33/month and runs the
 deterministic extractive path. Gateway endpoints for S3 are free and keep image
 layer pulls off the NAT path entirely.
+
+</details>
 
 ### Try it locally first
 
@@ -705,6 +823,23 @@ docker compose up          # API :8000, console :8501, Postgres
 That exercises the *cloud* configuration — the Postgres backend and the
 container entrypoint — on a laptop. For ordinary development `uv run uvicorn`
 against SQLite is faster and needs no build.
+
+---
+
+## What this project does not do
+
+Stated here rather than discovered later. Every one of these is a real gap, and
+none of them is hidden elsewhere in the repository.
+
+| Limitation | What it means in practice |
+|---|---|
+| **The production architecture has never been applied** | [infra/](infra/) — the highly available, autoscaled root — validates and is locked to a pinned provider, but no `plan` has ever run against AWS. Only the demo root is deployed. |
+| **The demo is not highly available and does not autoscale** | One Fargate task, one AZ, Single-AZ database. It has a load balancer with nothing to balance across. |
+| **No authentication on the console** | Anyone who reaches the URL sees the escalation queue and the audit trail. Network-level restriction is a lock on the door, not a login. |
+| **No retrieval-time authorization** | A payments runbook and a public FAQ are equally retrievable by everyone. There is no per-user or per-document access control. |
+| **Log coverage is partial** | The 42 expansion services have runbooks but no matching log lines, so log-evidence questions are scored only against the original seven services. |
+| **No answer or embedding cache** | During a real incident the same three questions get asked five times in ten minutes, and nothing here short-circuits the repeat cost. |
+| **Routing accuracy is unmeasured for real** | Offline mode's router is a keyword stub; the triage model's own routing quality has never been scored against a key. |
 
 ---
 
