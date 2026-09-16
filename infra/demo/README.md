@@ -4,11 +4,11 @@ The architecture that actually runs 24/7. `../` is the production architecture
 and is unchanged by anything here — different root, different state key, no
 shared resources.
 
-> **Validated, never applied.** `terraform validate` and `fmt` pass, the
-> dependency graph builds with no cycles (64 nodes, 83 edges), and the
-> PostgreSQL version and CloudFront prefix list were checked against the live
-> API. No `plan` has run, because a plan needs credentials. Expect to fix
-> something on the first one.
+> **Deployed and serving.** Applied in `us-east-1` and live at
+> <https://d269rj5uf8ejau.cloudfront.net> — CloudFront distribution
+> `E3PV2IJ33JC61M` in front of an ALB, one Fargate task, and an RDS PostgreSQL
+> 17 instance. The production root in `../` remains validated but never applied,
+> which is the distinction the two roots exist to make.
 
 ```
                         Internet
@@ -16,17 +16,21 @@ shared resources.
                            ▼
                     CloudFront distribution
                      *.cloudfront.net cert
-                           │  HTTP :8501
-                           │  (origin = EC2 public DNS of the Elastic IP)
+                           │  HTTP :80
+                           │  (origin = ALB; its SG admits CloudFront only)
                            ▼
    ┌───────────────── VPC 10.20.0.0/16 ─────────────────┐
    │                                                     │
-   │  public subnet (1 AZ)                               │
+   │  public subnets (2 AZ for the ALB, 1 for the task)  │
    │   ┌───────────────────────────────────────┐         │
-   │   │ EC2 t4g.medium · ARM64 · Elastic IP    │         │
-   │   │  ECS agent → cluster                   │         │
-   │   │   └─ 1 task: Streamlit + RAG pipeline  │         │
-   │   │      models baked into the image       │         │
+   │   │ ALB · 1 listener · 1 target group      │         │
+   │   └────────────────┬──────────────────────┘         │
+   │                    ▼                                │
+   │   ┌───────────────────────────────────────┐         │
+   │   │ ECS Fargate · ARM64 · 0.5 vCPU / 2 GB  │         │
+   │   │  1 task: Streamlit + RAG pipeline      │         │
+   │   │  public IP in place of a NAT gateway   │         │
+   │   │  models baked into the image           │         │
    │   └───────────────────────────────────────┘         │
    │        │ SG: PostgreSQL 5432                        │
    │        ▼                                            │
@@ -43,22 +47,22 @@ shared resources.
 
 | | **Demo (this root)** | **Production (`../`)** |
 |---|---|---|
-| Compute | 1 × EC2 t4g.medium, ECS on EC2 | ECS Fargate ARM64, 2–6 tasks |
-| **Availability** | **Single instance, single AZ. Not HA.** ASG replaces a failed instance in minutes | 2+ tasks across 2 AZs, ALB health checks, circuit breaker |
-| AZs | 1 for compute; 2 private subnets exist only because an RDS subnet group demands two | 2, public and private tiers |
-| Load balancing | **None.** CloudFront is a CDN with one origin | ALB, path routing, 2 target groups |
-| **Autoscaling** | **None.** ASG is min=max=1; that is replacement, not scaling | Target tracking on ECS CPU, 2→6 tasks |
+| Compute | 1 × ECS Fargate task, ARM64, 0.5 vCPU / 2 GB | ECS Fargate ARM64, 2–6 tasks |
+| **Availability** | **Single task, single AZ. Not HA.** ECS replaces a failed task in minutes | 2+ tasks across 2 AZs, ALB health checks, circuit breaker |
+| AZs | 1 for the task; the ALB spans 2 public subnets, and 2 private subnets exist because an RDS subnet group demands two | 2, public and private tiers |
+| Load balancing | ALB, 1 listener, 1 target group — **one task behind it, so nothing to balance across** | ALB, path routing, 2 target groups |
+| **Autoscaling** | **None.** `desired_count = 1` and no scaling policy; ECS replaces a task, it does not add one | Target tracking on ECS CPU, 2→6 tasks |
 | Database | RDS PostgreSQL Single-AZ, 20 GB, 7-day backups | RDS PostgreSQL Multi-AZ, Performance Insights, log exports |
-| Networking | Public subnet + IGW, **no NAT**; DB private with no route out | Public/private tiers, NAT or interface endpoints |
+| Networking | Task in a public subnet with a public IP, **no NAT**; DB private with no route out | Public/private tiers, NAT or interface endpoints |
 | TLS | CloudFront default certificate | ACM certificate on the ALB |
 | Observability | 1 log group, 7-day retention, 3 optional alarms | Log group + 4 alarms + SNS + Container Insights |
 | Deploys | Stop-then-start, ~60–90 s downtime | Rolling, zero downtime |
-| **Cost** | **~$45/month** | **~$76–131/month** |
+| **Cost** | **~$52/month** | **~$76–131/month** |
 
-**Why the demo is cheaper**, line by line: no ALB (−$16.43), no NAT gateway
-(−$32.85), one task instead of two (−$14.42), Single-AZ instead of Multi-AZ
-(−$16.28), SSM Parameter Store instead of Secrets Manager (−$0.80), no
-Container Insights, no Performance Insights, 7-day log retention.
+**Why the demo is cheaper**, line by line: no NAT gateway (−$32.85), one task
+instead of two (−$14.42), Single-AZ instead of Multi-AZ (−$16.28), SSM Parameter
+Store instead of Secrets Manager (−$0.80), no Container Insights, no Performance
+Insights, 7-day log retention.
 
 Every one of those is a capability removed, not an efficiency found.
 
@@ -78,24 +82,27 @@ because at 10–20 visitors a month they round to zero.
 
 | | Rate | Monthly |
 |---|---|---|
-| EC2 t4g.medium | $0.0336/hr | $24.53 |
-| Public IPv4 | $0.005/hr | $3.65 |
-| EBS gp3, 12 GB | $0.08/GB-mo | $0.96 |
+| Fargate ARM64, 0.5 vCPU / 2 GB | $0.03238/vCPU-hr + $0.00356/GB-hr | $17.02 |
+| ALB | $0.0225/hr | $16.43 |
+| Public IPv4, task ENI | $0.005/hr | $3.65 |
 | RDS db.t4g.micro Single-AZ | $0.016/hr | $11.68 |
 | RDS gp3, 20 GB | $0.115/GB-mo | $2.30 |
 | S3, ECR, CloudWatch | | ~$0.55 |
 | CloudFront, SSM, ECS control plane | free tier / free | $0.00 |
-| **Total** | | **~$43.67** |
+| **Total** | | **~$51.63** |
 
 | 1 hour | 1 day | 1 week | 1 month |
 |---|---|---|---|
-| $0.060 | $1.44 | $10.05 | $43.67 |
+| $0.071 | $1.70 | $11.88 | $51.63 |
 
-**$120 of credits ≈ 2.7 months.**
+**$120 of credits ≈ 2.3 months.** ALB LCU charges are excluded — at 10–20
+visitors a month they round to zero — as are the ALB's own public IPv4
+address-hours.
 
-### Why t4g.medium and not t4g.small
+### Why a 2 GB task, and the one setting that made it fit
 
-Measured, not assumed. Resident set of the application alone:
+Measured, not assumed. Resident set of the application alone, with ONNX
+Runtime's CPU arena at its default:
 
 ```
 after 1 query    1024 MB
@@ -104,14 +111,18 @@ after 4 queries  2114 MB
 after 8 queries  2120 MB   <- plateau
 ```
 
-That is the ONNX Runtime arena reaching steady state, not a leak, and it is
-insensitive to thread count (2114 MB at `OMP_NUM_THREADS=1`, 2126 MB at 2).
-Adding the ECS agent (~150 MB), the container runtime (~100 MB) and the OS
-(~300 MB) gives **~2.66 GB**, which does not fit t4g.small's 2 GB.
+That is the arena reaching steady state, not a leak, and it is insensitive to
+thread count (2114 MB at `OMP_NUM_THREADS=1`, 2126 MB at 2). It does not fit a
+2 GB Fargate task, whose memory limit applies to the container alone.
+
+Disabling the arena ([`src/aiops/onnx_tuning.py`](../../src/aiops/onnx_tuning.py))
+drops peak RSS to **1563 MB** — 29.6% lower — for 24.5% more mean query latency
+(6.73s → 8.38s) and bit-identical retrieval: identical ordering and identical
+scores across 240 reranked candidates. That is what makes 0.5 vCPU / 2 GB
+viable; at the default the task needs twice the memory.
 
 Swap was considered and rejected: paging ONNX inference is pathological, and it
-would hide the shortfall rather than fix it. t4g.medium costs $12.27/month more
-and leaves ~1.3 GB of headroom.
+would hide the shortfall rather than fix it.
 
 ## First deploy
 
@@ -193,12 +204,11 @@ aws ssm start-session --target "$(aws ec2 describe-instances \
 
 ## Watch for unexpected charges
 
-- **`cpu_credit_specification` is `standard`, deliberately.** Under `unlimited`
-  a sustained CPU spike bills surcharge credits with no ceiling.
+- **Fargate bills for the task whether or not anyone visits.** There is no
+  scale-to-zero here; `desired_count = 0` is the manual off switch.
 - **CloudFront's free tier is 1 TB/month.** Demo traffic will not approach it,
   but a scraper could.
 - **CloudWatch Logs ingestion is $0.50/GB.** The RDS parameter group logs only
   statements over 1 s for this reason.
-- **A `terraform destroy` leaves the Elastic IP billed if it is released from
-  the instance but not deallocated** — Terraform handles this, manual
-  intervention may not.
+- **Public IPv4 addresses bill per address-hour**, for the task ENI and for the
+  ALB's own addresses, whether or not traffic flows through them.
