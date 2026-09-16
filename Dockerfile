@@ -285,7 +285,7 @@ ARG INDEX_MODE
 
 LABEL org.opencontainers.image.title="AI Ops Copilot" \
       org.opencontainers.image.description="Multi-agent RAG over enterprise logs and knowledge" \
-      org.opencontainers.image.source="https://github.com/GojoV339/Multi_Agent_RAG_System_For_Enterprise_Log_And_Knowledge_Search" \
+      org.opencontainers.image.source="https://github.com/Dharaneswara-Reddy/Multi_Agent_RAG_System_For_Enterprise_Log_And_Knowledge_Search" \
       org.opencontainers.image.licenses="MIT"
 
 # Root-owned and read-only to the application. A missing model here means the

@@ -540,7 +540,7 @@ pwned by this". Scope it:
 ```
 "Condition": {
   "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-  "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:GojoV339/Multi_Agent_RAG_System_For_Enterprise_Log_And_Knowledge_Search:ref:refs/heads/main" }
+  "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:Dharaneswara-Reddy/Multi_Agent_RAG_System_For_Enterprise_Log_And_Knowledge_Search:ref:refs/heads/main" }
 }
 ```
 
@@ -867,7 +867,7 @@ Stated plainly so it does not have to be re-litigated:
 1. **`Dockerfile`** — multi-stage, `python:3.11-slim` base, `uv pip install`,
    ONNX models baked in with `FASTEMBED_CACHE_PATH` pointed at them, `linux/arm64`.
 2. **GitHub Actions OIDC role** with a `sub` condition scoped to
-   `repo:GojoV339/...:ref:refs/heads/main`, and an ECR repository with immutable
+   `repo:Dharaneswara-Reddy/...:ref:refs/heads/main`, and an ECR repository with immutable
    tags plus a lifecycle policy.
 3. **Postgres migration** — port the three SQLite tables in
    `knowledge/catalog.py` behind the existing SQLAlchemy layer; keep SQLite as
