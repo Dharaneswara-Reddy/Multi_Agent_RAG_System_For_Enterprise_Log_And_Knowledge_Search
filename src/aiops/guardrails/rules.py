@@ -217,6 +217,25 @@ def check_input(text: str) -> InputCheck:
 
 CITATION_RE = re.compile(r"\[([^\[\]]+?#\d+)\]")
 
+# Which bracket a model reaches for is a formatting habit, not a meaning.
+# Claude emits the [ref#0] form the prompt asks for; Groq's gpt-oss models emit
+# 【ref#0】 — CJK lenticular brackets — reliably enough that after the provider
+# switch the citation check found zero citations in fully cited answers, scored
+# grounding at zero, and sent every question to the escalation queue at 0.51
+# confidence against a 0.55 threshold. The answers were correct and sourced;
+# the parser was looking for the wrong character.
+#
+# Normalising the bracket loosens nothing. The ref inside is still matched
+# against the refs that were actually in context, so a fabricated source fails
+# exactly as before — this only decides whether the check can see the citation
+# at all.
+_CITATION_BRACKETS = str.maketrans({"【": "[", "】": "]", "〔": "[", "〕": "]"})
+
+
+def normalize_citations(text: str) -> str:
+    """Rewrite alternative citation brackets to the square form the check reads."""
+    return text.translate(_CITATION_BRACKETS)
+
 DESTRUCTIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("data_deletion", re.compile(r"\b(drop\s+table|truncate\s+table|delete\s+from|rm\s+-rf|dd\s+if=)\b", re.IGNORECASE)),
     ("cluster_mutation", re.compile(r"\bkubectl\s+delete\b|\bhelm\s+uninstall\b|\bterraform\s+destroy\b", re.IGNORECASE)),

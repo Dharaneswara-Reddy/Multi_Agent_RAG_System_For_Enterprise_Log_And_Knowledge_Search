@@ -3,7 +3,7 @@
 skinparam ranksep 26
 
 rectangle "**push to main**" as P $accentBg
-rectangle "**CI**\n<size:11><color:$dim>lint · types · 262 tests</color></size>" as CI
+rectangle "**CI**\n<size:11><color:$dim>lint · types · 264 tests</color></size>" as CI
 rectangle "**Quality gate**\n<size:11><color:$dim>recall ≥ 0.70  ·  MRR ≥ 0.60</color></size>\n<size:11><color:$dim>injection blocked = 100%</color></size>" as GATE $accentBg
 rectangle "**Regression → build fails**\n<size:11><color:$dim>nothing is shipped</color></size>" as FAIL $badBg
 rectangle "**Build**\n<size:11><color:$dim>ARM64 image → ECR, via an</color></size>\n<size:11><color:$dim>OIDC role with no stored keys</color></size>" as BUILD

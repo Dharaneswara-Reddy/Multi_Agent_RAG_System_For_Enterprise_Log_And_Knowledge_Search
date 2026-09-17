@@ -10,10 +10,12 @@ from __future__ import annotations
 import pytest
 
 from aiops.guardrails.rules import (
+    CITATION_RE,
     OutputCheck,
     check_input,
     check_output,
     decide_escalation,
+    normalize_citations,
     redact_pii,
     score_confidence,
 )
@@ -191,3 +193,30 @@ def test_destructive_action_with_single_source_escalates():
     d = decide_escalation(0.95, out, threshold=0.55, distinct_sources=1)
     assert d.escalate
     assert "fewer than two sources" in d.reason
+
+
+def test_lenticular_citation_brackets_are_read_as_citations():
+    """Groq's gpt-oss models cite with 【ref】 rather than [ref].
+
+    Before normalisation the citation check found nothing in a fully cited
+    answer, which zeroed the grounding component of confidence and escalated
+    every question. The ref is still validated against the allowed set, so this
+    changes what the check can see, not what it accepts.
+    """
+    ref = "Runbook: Payment processor timeouts (PAY-5021)#0"
+    answer = f"The socket timeout is 3000 ms 【{ref}】."
+
+    assert CITATION_RE.findall(answer) == []
+
+    normalised = normalize_citations(answer)
+    assert CITATION_RE.findall(normalised) == [ref]
+
+    out = check_output(normalised, [ref])
+    assert not any(f.rule == "missing_citations" for f in out.findings)
+
+
+def test_normalized_citation_to_a_fabricated_ref_is_still_blocked():
+    """Accepting the other bracket must not accept the other ref."""
+    answer = normalize_citations("Invented source 【Runbook: Does Not Exist#3】.")
+    out = check_output(answer, ["Runbook: Payment processor timeouts (PAY-5021)#0"])
+    assert any(f.rule == "fabricated_citation" for f in out.findings)

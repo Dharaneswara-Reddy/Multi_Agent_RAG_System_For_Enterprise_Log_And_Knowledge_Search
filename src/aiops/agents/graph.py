@@ -322,7 +322,11 @@ class Copilot:
                 "steps": [AgentStep(agent="synthesizer", summary="refused", **result.as_step_fields())],
             }
         return {
-            "answer": result.text,
+            # Normalise here rather than in the checker, so that the answer a
+            # reader sees is character-for-character the answer the guardrail
+            # verified. A checker that silently reads a different string than
+            # the UI renders is a worse bug than the one it fixes.
+            "answer": gr.normalize_citations(result.text),
             "steps": [
                 AgentStep(agent="synthesizer", summary="final answer drafted", **result.as_step_fields())
             ],

@@ -8,7 +8,7 @@ Get an answer with citations — or an honest “not sure”, handed to a human.
 <p>
   <a href="https://d269rj5uf8ejau.cloudfront.net"><img alt="Live demo" src="https://img.shields.io/badge/live_demo-online-0E7C82?style=for-the-badge&logo=amazonaws&logoColor=white"></a>
   <img alt="Python 3.11" src="https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white">
-  <img alt="262 tests passing" src="https://img.shields.io/badge/tests-262_passing-2E7D50?style=for-the-badge">
+  <img alt="264 tests passing" src="https://img.shields.io/badge/tests-264_passing-2E7D50?style=for-the-badge">
   <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-5B6A6C?style=for-the-badge">
 </p>
 
@@ -59,7 +59,7 @@ is the worst possible time to spend twenty minutes.
 | **Corpus** | 220 documents · ~44,000 words · 18,000 real log lines | 1,566 indexed chunks |
 | **Retrieval quality** | recall@k **0.979** · MRR **0.851** · hit rate **1.000** | 95 golden cases |
 | **Safety** | injection blocked **100%** · out-of-scope escalated **100%** | deterministic, no model |
-| **Tests** | **262** passing | CI fails the build on any regression |
+| **Tests** | **264** passing | CI fails the build on any regression |
 | **Running cost** | **~$52/month** on AWS | one Fargate task, one RDS instance |
 
 ---
@@ -81,7 +81,7 @@ uv run python scripts/setup.py          # corpus → DB → index → smoke test
 uv run streamlit run src/aiops/ui/app.py           # console
 uv run uvicorn aiops.api.server:app --reload       # API on :8000
 uv run python scripts/evaluate.py --gate           # evaluation + CI gate
-uv run pytest -q                                   # 262 tests
+uv run pytest -q                                   # 264 tests
 ```
 
 **No API key required to run.** Without `ANTHROPIC_API_KEY` the system runs in
