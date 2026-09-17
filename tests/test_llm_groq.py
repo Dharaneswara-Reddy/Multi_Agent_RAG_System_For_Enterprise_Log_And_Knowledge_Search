@@ -24,7 +24,7 @@ def clean_client():
 
 def _completion(text: str = "hello", finish: str = "stop") -> dict:
     return {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
         "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": finish}],
         "usage": {"prompt_tokens": 11, "completion_tokens": 7},
     }

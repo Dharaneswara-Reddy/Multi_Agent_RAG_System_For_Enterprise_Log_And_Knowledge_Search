@@ -674,8 +674,8 @@ Environment variables use the `AIOPS_` prefix (see `config.py`):
 | `AIOPS_FORCE_OFFLINE` | `0` | force the deterministic path (CI uses this) |
 | `AIOPS_REASONING_MODEL` | `claude-opus-5` | synthesis, Anthropic |
 | `AIOPS_CHEAP_MODEL` | `claude-haiku-4-5` | routing and extraction, Anthropic |
-| `AIOPS_GROQ_REASONING_MODEL` | `llama-3.3-70b-versatile` | synthesis, Groq |
-| `AIOPS_GROQ_CHEAP_MODEL` | `llama-3.1-8b-instant` | routing and extraction, Groq |
+| `AIOPS_GROQ_REASONING_MODEL` | `openai/gpt-oss-120b` | synthesis, Groq |
+| `AIOPS_GROQ_CHEAP_MODEL` | `openai/gpt-oss-20b` | routing and extraction, Groq |
 | `AIOPS_TOP_K` | `8` | retrieved chunks |
 | `AIOPS_DENSE_WEIGHT` | `0.80` | dense vs BM25 blend (sweep optimum) |
 | `AIOPS_DOC_CHUNK_TOKENS` | `160` | chunk ceiling (sweep optimum) |

@@ -93,8 +93,18 @@ class Settings(BaseSettings):
     # Groq model IDs. Configurable because Groq's catalogue moves faster than
     # this repository does — check https://console.groq.com/docs/models and
     # override rather than editing code.
-    groq_reasoning_model: str = "llama-3.3-70b-versatile"
-    groq_cheap_model: str = "llama-3.1-8b-instant"
+    #
+    # These were llama-3.3-70b-versatile and llama-3.1-8b-instant until Groq
+    # retired both on 2026-08-16 for free and developer tiers, and the running
+    # deployment started answering every question with a 404. The failure was
+    # worse than it looked: triage catches its own exceptions and falls back to
+    # the hybrid route, so the cheap model's 404 was silently absorbed and only
+    # the synthesis call surfaced the error. A retired model is not an outage
+    # the code can detect — the endpoint answers, it just answers 404 — so the
+    # defence is that these are settings, overridable per deployment without a
+    # rebuild.
+    groq_reasoning_model: str = "openai/gpt-oss-120b"
+    groq_cheap_model: str = "openai/gpt-oss-20b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # 429 is the steady state on a free key, not an exception. Retries honour
