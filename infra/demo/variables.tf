@@ -188,6 +188,26 @@ variable "llm_provider" {
   }
 }
 
+variable "groq_reasoning_model" {
+  description = <<-EOT
+    Groq model id for synthesis. Overrides the application default.
+
+    Groq withdraws models from its free and developer tiers on its own
+    schedule: llama-3.3-70b-versatile and llama-3.1-8b-instant were both
+    retired on 2026-08-16, and a retired id fails as a 404 at request time
+    rather than at deploy time, so nothing here can validate it. Check
+    https://console.groq.com/docs/deprecations before changing it.
+  EOT
+  type        = string
+  default     = "openai/gpt-oss-120b"
+}
+
+variable "groq_cheap_model" {
+  description = "Groq model id for routing and extraction. See groq_reasoning_model."
+  type        = string
+  default     = "openai/gpt-oss-20b"
+}
+
 variable "force_offline" {
   description = <<-EOT
     1 keeps answers deterministic and extractive, and needs no API key. Set to

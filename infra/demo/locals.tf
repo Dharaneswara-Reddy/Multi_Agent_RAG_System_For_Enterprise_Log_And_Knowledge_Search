@@ -61,6 +61,15 @@ locals {
     # reason it is here; "anthropic" remains the default everywhere else.
     { name = "AIOPS_LLM_PROVIDER", value = var.llm_provider },
 
+    # Model ids, set here rather than left to the image's compiled-in defaults.
+    # Groq retires models on a schedule this repository does not control — both
+    # previous defaults were withdrawn on 2026-08-16 and the deployment answered
+    # 404 to every question until they were changed. As task-definition
+    # environment, a replacement model is a `terraform apply`; as a code default
+    # it would be an image rebuild, a push and a deploy.
+    { name = "AIOPS_GROQ_REASONING_MODEL", value = var.groq_reasoning_model },
+    { name = "AIOPS_GROQ_CHEAP_MODEL", value = var.groq_cheap_model },
+
     { name = "AIOPS_FORCE_OFFLINE", value = var.force_offline },
     { name = "AIOPS_UI_PORT", value = tostring(var.container_port) },
     { name = "AWS_REGION", value = var.region },
