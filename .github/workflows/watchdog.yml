@@ -1,0 +1,77 @@
+name: Watchdog
+
+# Checks that the deployed demo is still capable of answering, weekly.
+#
+# This exists because of a specific failure. Groq retired both configured models
+# on 2026-08-16; the container stayed up, the health check passed, CloudFront
+# kept returning 200, and every question returned a 404 from the provider. The
+# outage was found a month later by a human clicking the link.
+#
+# So liveness is not the thing worth checking. The question is narrower: do the
+# model ids this deployment is configured with still exist? That is answerable
+# in one request, costs no tokens, and fails on the day a model is withdrawn
+# rather than the day someone notices.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Weekly is the right cadence for a demo nobody pages
+    # for — often enough that a dead link is caught before an interview, rare
+    # enough that the free tier never notices.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The site answers at all
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+            https://d269rj5uf8ejau.cloudfront.net)
+          echo "CloudFront returned $code"
+          # 200 only proves Streamlit is serving. It says nothing about whether
+          # the pipeline behind it can reach a model — see the note above.
+          [ "$code" = "200" ]
+
+      - name: The configured models still exist
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            # Same convention as the deploy workflow: an unconfigured repository
+            # says so and skips, rather than failing and training people to
+            # ignore a red cross.
+            echo "::notice::GROQ_API_KEY is not set; skipping the model check."
+            exit 0
+          fi
+
+          # Read the ids from the Terraform that deploys them, so this checks
+          # what is actually running rather than a copy that can drift.
+          reasoning=$(grep -A12 'variable "groq_reasoning_model"' infra/demo/variables.tf \
+                      | grep -oP 'default\s*=\s*"\K[^"]+')
+          cheap=$(grep -A6 'variable "groq_cheap_model"' infra/demo/variables.tf \
+                  | grep -oP 'default\s*=\s*"\K[^"]+')
+          echo "configured: reasoning=$reasoning cheap=$cheap"
+
+          curl -sS --max-time 30 https://api.groq.com/openai/v1/models \
+            -H "Authorization: Bearer $GROQ_API_KEY" > models.json
+
+          python3 - "$reasoning" "$cheap" <<'PY'
+          import json, sys
+          available = {m["id"] for m in json.load(open("models.json"))["data"]}
+          missing = [m for m in sys.argv[1:] if m not in available]
+          for m in sys.argv[1:]:
+              print(("  OK   " if m in available else "  GONE ") + m)
+          if missing:
+              print("::error::Retired model(s): " + ", ".join(missing)
+                    + ". The demo is answering 404 to every question. "
+                    + "Pick replacements from https://console.groq.com/docs/deprecations, "
+                    + "update infra/demo/variables.tf and src/aiops/config.py, "
+                    + "then apply and force a new ECS deployment.")
+              sys.exit(1)
+          PY
